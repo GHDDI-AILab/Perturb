@@ -1,12 +1,8 @@
 __all__ = ['PertData']
 
-import sys
-import logging
-import requests
 import warnings
-from tqdm import tqdm
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 from zipfile import ZipFile
 
 import torch
@@ -19,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
 from ..tokenizer import GeneVocab
+from ..utils import create_logger, data_downloader, Preprocessor
 
 sc.settings.verbosity = 1
 warnings.filterwarnings("ignore")
@@ -162,26 +159,6 @@ class PertBase:
 
         genes = self.adata.var[self.gene_col].tolist()
         return np.array(self.vocab(genes), dtype=int)
-    
-    def set_logger(self, name: str) -> None:
-        """
-        Configure a logger with the specified name.
-
-        Args:
-            name (str): a string for the logger name.
-
-        Returns:
-            None
-        """
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.DEBUG)
-
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.DEBUG)
-        ch.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        self.logger.addHandler(ch)
 
 
 class PertDataset(Dataset, PertBase):
@@ -261,8 +238,7 @@ class PertData(PertBase):
             test_size: float = 0.1,
             vocab_file: Optional[Path] = None,
         ) -> None:
-        #TODO: the problem of logger duplicates
-        self.set_logger(self.__class__.__name__)
+        self.logger = create_logger(name=self.__class__.__name__)
         self.dataset = str(dataset)
         self.workdir = Path(workdir)
         if not self.workdir.exists():
@@ -290,7 +266,7 @@ class PertData(PertBase):
         """
         if self.dataset.lower() in ('dixit', 'norman', 'adamson'):
             data_path = self.workdir / self.dataset
-            self.zip_data_download_wrapper(
+            self._zipdata_download_wrapper(
                 url=self.urls[self.dataset.lower()],
                 save_path=data_path
             )
@@ -307,40 +283,13 @@ class PertData(PertBase):
         self.dataset_path = data_path
         self.logger.info('Loaded adata.')
 
-    @staticmethod
-    def data_downloader(url: str, save_path: str) -> None:
-        """
-        A data download helper with progress bar.
-    
-        Args:
-            url (str): the url of the dataset
-            save_path (str): the path to save the dataset
-
-        Returns:
-            None
-        """
-        if Path(save_path).exists():
-            print('Found local copy.', file=sys.stderr)
-        else:
-            response = requests.get(url, stream=True)
-            total_size_in_bytes = int(response.headers.get('content-length', 0))
-            block_size = 1024
-            progress_bar = tqdm(
-                total=total_size_in_bytes, unit='iB', unit_scale=True
-            )
-            with open(save_path, 'wb') as f:
-                for data in response.iter_content(block_size):
-                    progress_bar.update(len(data))
-                    f.write(data)
-            progress_bar.close()
-
-    def zip_data_download_wrapper(self, url: str, save_path: str) -> None:
+    def _zipdata_download_wrapper(self, url: str, save_path: str) -> None:
         if Path(save_path).exists():
             self.logger.info('Found local copy.')
         else:
             file_path = str(save_path) + '.zip'
             self.logger.info('Downloading...')
-            self.data_downloader(url, file_path)
+            data_downloader(url, file_path)
             self.logger.info('Extracting zip file...')
             with ZipFile(file_path, 'r') as f:
                 f.extractall(path=self.workdir)
@@ -359,6 +308,44 @@ class PertData(PertBase):
             raise AttributeError('vocab_file not given and adata not loaded!')
         vocab.set_default_index(vocab[self.pad_token])
         self.vocab = vocab
+
+    def preprocess(
+            self,
+            use_key: Optional[str] = None,
+            filter_gene_by_counts: int|bool = False,
+            filter_cell_by_counts: int|bool = False,
+            normalize_total: float|bool = False,
+            log1p: bool = False,
+            batch_key: Optional[str] = None,
+            hvg_use_key: Optional[str] = None,
+            subset_hvg: int|bool = False,
+            binning: int|bool = False,
+        ) -> None:
+        """
+        Data preprocessing.
+
+        Returns:
+            None
+        """
+        hvg_flavor = "seurat_v3" if binning else "cell_ranger"
+        preprocessor = Preprocessor(
+            use_key=use_key,
+            filter_gene_by_counts=filter_gene_by_counts,
+            filter_cell_by_counts=filter_cell_by_counts,
+            normalize_total=normalize_total,
+            log1p=log1p,
+            subset_hvg=subset_hvg,
+            hvg_use_key=hvg_use_key,
+            hvg_flavor=hvg_flavor,
+            binning=binning,
+        )
+        key_to_process = preprocessor(self.adata, batch_key=batch_key)
+        if any([filter_gene_by_counts, filter_cell_by_counts, 
+                normalize_total, log1p, subset_hvg, binning]):
+            self.adata.X = sparse.csr_matrix(
+                sc.get._get_obs_rep(self.adata, layer=key_to_process)
+            )
+            self.set_DE_genes()
 
     def get_dataloader(
             self, batch_size: int, test_batch_size: Optional[int] = None
