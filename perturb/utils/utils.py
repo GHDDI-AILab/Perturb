@@ -1,3 +1,4 @@
+import re
 import sys
 import logging
 import requests
@@ -33,6 +34,7 @@ def create_logger(name: str, level: int = logging.INFO) -> logging.Logger:
 def data_downloader(url: str, save_path: str) -> None:
     """
     A data download helper with progress bar.
+    Code from https://github.com/snap-stanford/GEARS/blob/master/gears/utils.py.
 
     Args:
         url (str): the url of the dataset
@@ -55,4 +57,18 @@ def data_downloader(url: str, save_path: str) -> None:
                 progress_bar.update(len(data))
                 f.write(data)
         progress_bar.close()
+
+def get_type(x) -> str:
+    """
+    Get the type of the variable as a string.
+    Code from https://github.com/dzyim/learn.py/blob/dev/Lib/structure.py.
+
+    Args:
+        x (Any): the input variable
+
+    Returns:
+        str
+    """
+    _type = str(type(x))
+    return re.match("<class '(.+)'>", _type).groups()[0]
 

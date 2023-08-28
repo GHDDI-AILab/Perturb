@@ -1,8 +1,8 @@
 __all__ = ['PertData']
 
 import warnings
-from pathlib import Path
 from typing import Optional
+from pathlib import Path
 from zipfile import ZipFile
 
 import torch
@@ -15,7 +15,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
 from ..tokenizer import GeneVocab
-from ..utils import create_logger, data_downloader, Preprocessor
+from ..utils import create_logger, data_downloader
+from ..utils.preprocess import Preprocessor
 
 sc.settings.verbosity = 1
 warnings.filterwarnings("ignore")
@@ -340,8 +341,9 @@ class PertData(PertBase):
             binning=binning,
         )
         key_to_process = preprocessor(self.adata, batch_key=batch_key)
+
         if any([filter_gene_by_counts, filter_cell_by_counts, 
-                normalize_total, log1p, subset_hvg, binning]):
+                normalize_total, log1p, subset_hvg, binning,]):
             self.adata.X = sparse.csr_matrix(
                 sc.get._get_obs_rep(self.adata, layer=key_to_process)
             )
@@ -455,10 +457,9 @@ class PertData(PertBase):
                 genes = gene_ids
                 values = data[i]
             else:
-                idx = data[i].nonzero()
-                idx_ = idx.view(idx.shape[0])
-                genes = gene_ids[idx_]
-                values = data[i][idx_]
+                idx = data[i].nonzero().squeeze()
+                genes = gene_ids[idx]
+                values = data[i][idx]
 
             if append_cls:
                 genes = torch.cat([torch.tensor([cls_id]), genes])
