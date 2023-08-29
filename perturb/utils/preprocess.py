@@ -100,6 +100,7 @@ class Preprocessor:
         key_to_process = self.use_key
         if key_to_process == "X":
             key_to_process = None  # the scanpy APIs use None for "X"
+
         # preliminary checks, will use later
         is_logged = self.check_logged(adata, obs_key=key_to_process)
 
@@ -229,9 +230,8 @@ class Preprocessor:
         digits = np.ceil(digits).astype(np.int64)
         return digits
 
-    def check_logged(
-            self, adata: ad.AnnData, obs_key: Optional[str] = None
-        ) -> bool:
+    @staticmethod
+    def check_logged(adata: ad.AnnData, obs_key: Optional[str] = None) -> bool:
         r"""
         Check if the data is already log1p transformed.
 

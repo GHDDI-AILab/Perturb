@@ -72,18 +72,30 @@ class PertBase:
         """
         self.adata = self.adata[:, self.adata.var.dropna().index]
 
-    def set_DE_genes(self, key: Optional[str] = None) -> None:
+    def set_DE_genes(
+            self, key: Optional[str] = None, check_logged: bool = False
+        ) -> None:
         """
         Rank genes for characterizing groups.
 
         Args:
-            key (str): the key to save the information in `adata.uns`.
+            key (Optional[str]):
+                The key to save the information in `adata.uns`
+            check_logged (bool):
+                To check if the data is logarithmized or not (default: False)
 
         Returns:
             None
         """
+        key_to_process = None
+
         if key is None:
             key = self.key_de_genes
+
+        if check_logged:
+            is_logged = Preprocessor.check_logged(self.adata, key_to_process)
+            if not is_logged:
+                raise ValueError("Expecting logarithmized data.")
 
         groupby = self.condition_name
         covariate = 'cell_type'
@@ -112,10 +124,8 @@ class PertBase:
         for cov_cat in cov_categories:
             #name of the control group in the groupby obs column
             control_group_cov = '_'.join([cov_cat, control_group])
-
             #subset adata to cells belonging to a covariate category
             adata_cov = self.adata[self.adata.obs[covariate] == cov_cat]
-
             #compute DEGs
             sc.tl.rank_genes_groups(
                 adata_cov,
@@ -123,7 +133,8 @@ class PertBase:
                 reference=control_group_cov,
                 rankby_abs=True,
                 n_genes=len(self.adata.var),
-                use_raw=False
+                use_raw=False,
+                layer=key_to_process,
             )
             #add entries to dictionary of gene sets
             de_genes = pd.DataFrame(adata_cov.uns['rank_genes_groups']['names'])
@@ -250,8 +261,6 @@ class PertData(PertBase):
         self._load_adata()
         self._check_mode()
         self._drop_NA_genes()
-        if self.get_DE_genes() is None:
-            self.set_DE_genes()
         self.set_vocab(vocab_file)
 
     def _load_adata(self) -> None:
@@ -328,7 +337,8 @@ class PertData(PertBase):
         Returns:
             None
         """
-        hvg_flavor = "seurat_v3" if binning else "cell_ranger"
+        is_logged = Preprocessor.check_logged(self.adata)
+        hvg_flavor = "cell_ranger" if is_logged else "seurat_v3"
         preprocessor = Preprocessor(
             use_key=use_key,
             filter_gene_by_counts=filter_gene_by_counts,
@@ -522,12 +532,12 @@ class PertData(PertBase):
             max_len: int = n_genes + int(append_cls)
 
         if n_genes + int(append_cls) > max_len:
-            has_de_idx: bool = False
+            return_de_idx: bool = False
             input_gene_idx = torch.randperm(n_genes)[
                 :max_len - int(append_cls)
             ]
         else:
-            has_de_idx: bool = True
+            return_de_idx: bool = True
             input_gene_idx = torch.arange(n_genes)
 
         if self.mode == "gene":
@@ -575,6 +585,6 @@ class PertData(PertBase):
             include_zero_gene=include_zero_gene,
         )
         y['target_values'] = y.pop('values').float()
-        de = {'de_idx': batch_data['de_idx'][row_idx]} if has_de_idx else {}
+        de = {'de_idx': batch_data['de_idx'][row_idx]} if return_de_idx else {}
         return pert|x|y|de
 
