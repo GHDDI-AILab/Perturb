@@ -372,7 +372,7 @@ class PertData(PertBase):
                 url=self.urls[self.dataset.lower()],
                 save_path=data_path
             )
-        elif Path(self.dataset).exists():
+        elif Path(self.dataset).is_dir():
             data_path = Path(self.dataset)
         else:
             raise ValueError(
