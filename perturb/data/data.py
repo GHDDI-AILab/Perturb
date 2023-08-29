@@ -72,11 +72,102 @@ class PertBase:
         """
         self.adata = self.adata[:, self.adata.var.dropna().index]
 
+    def _set_non_dropout_non_zero_genes(
+            self, key: Optional[str] = None
+        ) -> None:
+        """
+        Set non-dropout and non-zero genes after ranking genes for groups.
+
+        Reference:
+          https://github.com/snap-stanford/GEARS/blob/master/gears/data_utils.py
+
+        Args:
+            key (Optional[str]):
+                The key to save the information in `adata.uns`
+
+        Returns:
+            None
+        """
+        if key is None:
+            key = self.key_de_genes
+
+        groupby = self.condition_name
+
+        # Calculate mean expression for each condition
+        unique_conditions = self.adata.obs[self.cond_col].unique()
+        conditions2index = {
+            i: np.where(self.adata.obs[self.cond_col] == i)[0]
+            for i in unique_conditions
+        }
+        condition2mean_expression = {
+            i: np.mean(self.adata.X[j], axis = 0)
+            for i, j in conditions2index.items()
+        }
+        pert_list = np.array(list(condition2mean_expression.keys()))
+        mean_expression = np.array(
+            list(condition2mean_expression.values())
+            ).reshape(
+            len(unique_conditions), self.adata.X.toarray().shape[1]
+            )
+        ctrl = mean_expression[np.where(pert_list == self.ctrl_str)[0]]
+    
+        ## In silico modeling and upperbounding
+        pert2pert_full_id = dict(
+            self.adata.obs[[self.cond_col, groupby]].values
+        )
+        pert_full_id2pert = dict(
+            self.adata.obs[[groupby, self.cond_col]].values
+        )
+        gene_id2idx = dict(
+            zip(self.adata.var.index.values, range(len(self.adata.var)))
+        )
+        gene_idx2id = dict(
+            zip(range(len(self.adata.var)), self.adata.var.index.values)
+        )
+
+        non_zero_gene_idx = {}
+        top_non_zero_de_20 = {}
+        non_dropout_gene_idx = {}
+        top_non_dropout_de_20 = {}
+
+        for pert in self.adata.uns[key].keys():
+            p = pert_full_id2pert[pert]
+            X = np.mean(
+                self.adata[self.adata.obs[self.cond_col] == p].X, axis=0
+            )
+            non_zero = np.where(np.array(X)[0] != 0)[0]
+            zero = np.where(np.array(X)[0] == 0)[0]
+            true_zeros = np.intersect1d(
+                zero, np.where(np.array(ctrl)[0] == 0)[0]
+            )
+            non_dropouts = np.concatenate((non_zero, true_zeros))
+
+            top = self.adata.uns[key][pert]
+            gene_idx_top = [gene_id2idx[i] for i in top]
+
+            non_dropout_20 = [i for i in gene_idx_top if i in non_dropouts][:20]
+            non_dropout_20_gene_id = [gene_idx2id[i] for i in non_dropout_20]
+            non_zero_20 = [i for i in gene_idx_top if i in non_zero][:20]
+            non_zero_20_gene_id = [gene_idx2id[i] for i in non_zero_20]
+
+            non_zero_gene_idx[pert] = np.sort(non_zero)
+            top_non_zero_de_20[pert] = np.array(non_zero_20_gene_id)
+            non_dropout_gene_idx[pert] = np.sort(non_dropouts)
+            top_non_dropout_de_20[pert] = np.array(non_dropout_20_gene_id)
+        
+        self.adata.uns['top_non_dropout_de_20'] = top_non_dropout_de_20
+        self.adata.uns['non_dropout_gene_idx'] = non_dropout_gene_idx
+        self.adata.uns['top_non_zero_de_20'] = top_non_zero_de_20
+        self.adata.uns['non_zero_gene_idx'] = non_zero_gene_idx
+    
     def set_DE_genes(
             self, key: Optional[str] = None, check_logged: bool = False
         ) -> None:
         """
         Rank genes for characterizing groups.
+
+        Reference:
+          https://github.com/snap-stanford/GEARS/blob/master/gears/data_utils.py
 
         Args:
             key (Optional[str]):
@@ -142,6 +233,7 @@ class PertBase:
                 gene_dict[group] = np.array(de_genes[group].tolist())
 
         self.adata.uns[key] = gene_dict
+        self._set_non_dropout_non_zero_genes(key)
 
     def get_DE_genes(self, key: Optional[str] = None) -> Optional[dict]:
         """
@@ -285,7 +377,7 @@ class PertData(PertBase):
         else:
             raise ValueError(
                 "The dataset is either Norman/Adamson/Dixit "
-                "or a dir with a perturb_processed.h5ad file."
+                "or a directory with a perturb_processed.h5ad file."
             )
         self.adata = ad.read_h5ad(data_path / 'perturb_processed.h5ad')
         self.ctrl_adata = None
@@ -318,6 +410,7 @@ class PertData(PertBase):
             raise AttributeError('vocab_file not given and adata not loaded!')
         vocab.set_default_index(vocab[self.pad_token])
         self.vocab = vocab
+        self.logger.info('Loaded vocab.')
 
     def preprocess(
             self,
@@ -358,6 +451,7 @@ class PertData(PertBase):
                 sc.get._get_obs_rep(self.adata, layer=key_to_process)
             )
             self.set_DE_genes()
+            self.logger.info('Preprocessed adata.')
 
     def get_dataloader(
             self, batch_size: int, test_batch_size: Optional[int] = None
@@ -398,6 +492,7 @@ class PertData(PertBase):
             'val_loader': val_loader,
             'test_loader': test_loader,
         }
+        self.logger.info('Got dataloader.')
 
     def get_pert_flags(self, condition: str) -> Optional[np.ndarray[int]]:
         """
