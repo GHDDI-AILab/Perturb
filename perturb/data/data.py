@@ -193,17 +193,17 @@ class PertBase:
         control_group = self.ctrl_group
 
         if self.mode == "gene":
-            self.adata.obs.loc[:, 'control'] = self.adata.obs[self.cond_col
+            self.adata.obs['control'] = self.adata.obs[self.cond_col
                 ].apply(lambda x: 0 if len(x.split('+')) == 2 else 1)
-            self.adata.obs.loc[:, 'dose_val'] = self.adata.obs[self.cond_col
+            self.adata.obs['dose_val'] = self.adata.obs[self.cond_col
                 ].apply(lambda x: '1+1' if len(x.split('+')) == 2 else '1')
-            self.adata.obs.loc[:, groupby] = self.adata.obs.apply(
+            self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
                     x[covariate], x[self.cond_col], x['dose_val']
                 ]), axis = 1
             )
         elif self.mode == "compound":
-            self.adata.obs.loc[:, groupby] = self.adata.obs.apply(
+            self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
                     x[covariate], x[self.cond_col]
                 ]), axis = 1
@@ -459,9 +459,11 @@ class PertData(PertBase):
         if test_batch_size is None:
             test_batch_size = batch_size
 
-        self.ctrl_adata = self.adata[
-            self.adata.obs[self.cond_col] == self.ctrl_str
-        ]
+        if self.ctrl_adata is None:
+            self.ctrl_adata = self.adata[
+                self.adata.obs[self.cond_col] == self.ctrl_str
+            ]
+
         if not self.keep_ctrl:
             self.adata = self.adata[
                 self.adata.obs[self.cond_col] != self.ctrl_str
@@ -493,6 +495,40 @@ class PertData(PertBase):
             'test_loader': test_loader,
         }
         self.logger.info('Got dataloader.')
+
+    def create_dataset_for_prediction(
+            self, perturbation: str, pool_size: int
+        ) -> PertDataset:
+        if self.ctrl_adata is None:
+            self.ctrl_adata = self.adata[
+                self.adata.obs[self.cond_col] == self.ctrl_str
+            ]
+
+        indices = np.random.randint(0, len(self.ctrl_adata), pool_size)
+        x = self.ctrl_adata[indices, ]
+        fake_y = x.copy()
+        fake_y.obs[self.cond_col] = perturbation
+        fake_y.obs[self.pert_col] = perturbation
+
+        if self.mode == "gene":
+            fake_y.obs['dose_val'] = fake_y.obs[
+                self.cond_col
+            ].apply(
+                lambda x: '1+1' if len(x.split('+')) == 2 else '1'
+            )
+            fake_y.obs[self.condition_name] = fake_y.obs.apply(
+                lambda x: '_'.join([
+                    x['cell_type'], x[self.cond_col], x['dose_val']
+                ]), axis = 1
+            )
+        elif self.mode == "compound":
+            fake_y.obs[self.condition_name] = fake_y.obs.apply(
+                lambda x: '_'.join([
+                    x['cell_type'], x[self.cond_col]
+                ]), axis = 1
+            )
+
+        return PertDataset(x, fake_y, self.vocab)
 
     def get_pert_flags(self, condition: str) -> Optional[np.ndarray[int]]:
         """
