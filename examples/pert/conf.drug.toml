@@ -1,0 +1,80 @@
+[ h.p ]  # Hyperparameters
+
+project = "Perturb"
+dataset = "data/K562_compound188"
+mode = "compound"
+seed = 42
+
+# settings for data prcocessing
+mask_ratio = 0.4
+mask_value = -1
+special_tokens = ["<pad>", "<cls>", "<eoc>"]
+cls_token = "<cls>"
+pad_token = "<pad>"
+pad_value  = -2  # 0 or -2
+pert_pad_id = 2
+n_bins = 51
+include_zero_gene = "batch-wise"  # include zero expr genes in training input: "all", "batch-wise", "row-wise", or False
+n_hvg = 1200  # number of highly variable genes
+max_seq_len = 1201  # n_hvg+1 if n_hvg > 0
+per_seq_batch_sample = true
+
+# settings for training
+MLM = true    # Whether to use masked language modeling, currently it is always on.
+GEPC = true   # Masked value prediction for cell embedding
+CLS = false   # Celltype classification objective
+CCE = false   # Contrastive cell embedding objective
+ECS = false   # Elastic cell similarity objective
+DAB = false   # Domain adaptation by reverse backpropagation
+DSBN = false  # Domain-specific Batch Norm
+cell_emb_style = "cls"
+dab_weight = 1.0
+ecs_threshold = 0.8  # Elastic cell similarity objective, 0.0 to 1.0, 0.0 to disable
+explicit_zero_prob = false  # whether explicit bernoulli for zeros
+mvc_decoder_style = "inner product"
+use_batch_labels = false
+
+do_train = true
+epochs = 1
+batch_size = 64
+eval_batch_size = 16
+save_eval_interval = 1
+log_interval = 100
+test_size = 0.1
+
+# settings for the model
+device = "cuda:0"
+load_model = "save/scGPT_human"
+load_param_prefixes = ["encoder", "value_encoder", "transformer_encoder"]
+# if load_model exists, (embsize, d_hid, nlayers, nheads) will be ignored
+embsize = 512
+d_hid = 512
+nheads = 8
+nlayers = 12
+nlayers_cls = 3
+dropout = 0.2
+pre_norm = false
+use_fast_transformer = true
+amp = true  # Automatic Mixed Precision
+
+# settings for optimizer
+lr = 1e-4
+schedule_interval = 1
+schedule_ratio = 0.9  # ratio of epochs for learning rate schedule
+
+
+[ p.p ]  # Preprocessing
+
+use_key = "X"
+filter_gene_by_counts = 3       # Step 1
+filter_cell_by_counts = false   # Step 2
+normalize_total = 1e4           # Step 3: whether to normalize the raw data and to what sum
+result_normed_key = "X_normed"  # the key in adata.layers to store the normalized data
+log1p = true                    # Step 4: whether to log1p the normalized data  # log1p = data_is_raw
+result_log1p_key = "X_log1p"    # the key in adata.layers to store the log transformed data
+subset_hvg = 1200               # Step 5: whether to subset the raw data to highly variable genes  # subset_hvg = n_hvg
+hvg_flavor = "seurat_v3"        # hvg_flavor = "seurat_v3" if data_is_raw else "cell_ranger"
+binning = false                 # Step 6: whether to bin the raw data and to what number of bins
+result_binned_key = "X_binned"  # the key in adata.layers to store the binned data
+
+
