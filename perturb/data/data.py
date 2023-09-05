@@ -44,22 +44,21 @@ class PertBase:
         if "cell_type" not in self.adata.obs.columns:
             raise ValueError("Cannot find 'cell_type' in adata.obs!")
 
-        if set(["treatment", "canonical_smiles"]
-                ).issubset(self.adata.obs.columns):
+        if set(["canonical_smiles",]).issubset(self.adata.obs.columns):
             self.mode = "compound"
             self.gene_col = "symbol"
-            self.cond_col = "treatment"
-            self.ctrl_str = "S0000"
-            self.ctrl_group = "S0000"  # for calculate DE
+            #self.cond_col = "treatment"
+            #self.ctrl_str = "S0000"
             self.pert_col = "canonical_smiles"
-        elif set(["condition"]
-                ).issubset(self.adata.obs.columns):
+            self.ctrl_str = "Vehicle"
+            self.ctrl_group = "Vehicle"  # for calculate DE
+        elif set(["condition",]).issubset(self.adata.obs.columns):
             self.mode = "gene"
             self.gene_col = "gene_name"
-            self.cond_col = "condition"
+            #self.cond_col = "condition"
+            self.pert_col = "condition"
             self.ctrl_str = "ctrl"
             self.ctrl_group = "ctrl_1"  # for calculate DE
-            self.pert_col = "condition"
         else:
             raise ValueError("Cannot identify the pert mode!")
 
@@ -82,7 +81,7 @@ class PertBase:
           https://github.com/snap-stanford/GEARS/blob/master/gears/data_utils.py
 
         Args:
-            key (Optional[str]):
+            key (str, optional):
                 The key to save the information in `adata.uns`
 
         Returns:
@@ -94,29 +93,31 @@ class PertBase:
         groupby = self.condition_name
 
         # Calculate mean expression for each condition
-        unique_conditions = self.adata.obs[self.cond_col].unique()
+        unique_conditions = self.adata.obs[self.pert_col].unique()
         conditions2index = {
-            i: np.where(self.adata.obs[self.cond_col] == i)[0]
+            i: np.where(self.adata.obs[self.pert_col] == i)[0]
             for i in unique_conditions
         }
         condition2mean_expression = {
             i: np.mean(self.adata.X[j], axis = 0)
             for i, j in conditions2index.items()
         }
-        pert_list = np.array(list(condition2mean_expression.keys()))
+        pert_list = np.array(
+            list(condition2mean_expression.keys())
+        )
         mean_expression = np.array(
             list(condition2mean_expression.values())
-            ).reshape(
+        ).reshape(
             len(unique_conditions), self.adata.X.toarray().shape[1]
-            )
+        )
         ctrl = mean_expression[np.where(pert_list == self.ctrl_str)[0]]
-    
+        
         ## In silico modeling and upperbounding
         pert2pert_full_id = dict(
-            self.adata.obs[[self.cond_col, groupby]].values
+            self.adata.obs[[self.pert_col, groupby]].values
         )
         pert_full_id2pert = dict(
-            self.adata.obs[[groupby, self.cond_col]].values
+            self.adata.obs[[groupby, self.pert_col]].values
         )
         gene_id2idx = dict(
             zip(self.adata.var.index.values, range(len(self.adata.var)))
@@ -133,7 +134,7 @@ class PertBase:
         for pert in self.adata.uns[key].keys():
             p = pert_full_id2pert[pert]
             X = np.mean(
-                self.adata[self.adata.obs[self.cond_col] == p].X, axis=0
+                self.adata[self.adata.obs[self.pert_col] == p].X, axis=0
             )
             non_zero = np.where(np.array(X)[0] != 0)[0]
             zero = np.where(np.array(X)[0] == 0)[0]
@@ -170,7 +171,7 @@ class PertBase:
           https://github.com/snap-stanford/GEARS/blob/master/gears/data_utils.py
 
         Args:
-            key (Optional[str]):
+            key (str, optional):
                 The key to save the information in `adata.uns`
             check_logged (bool):
                 To check if the data is logarithmized or not (default: False)
@@ -193,19 +194,19 @@ class PertBase:
         control_group = self.ctrl_group
 
         if self.mode == "gene":
-            self.adata.obs['control'] = self.adata.obs[self.cond_col
+            self.adata.obs['control'] = self.adata.obs[self.pert_col
                 ].apply(lambda x: 0 if len(x.split('+')) == 2 else 1)
-            self.adata.obs['dose_val'] = self.adata.obs[self.cond_col
+            self.adata.obs['dose_val'] = self.adata.obs[self.pert_col
                 ].apply(lambda x: '1+1' if len(x.split('+')) == 2 else '1')
             self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
-                    x[covariate], x[self.cond_col], x['dose_val']
+                    x[covariate], x[self.pert_col], x['dose_val']
                 ]), axis = 1
             )
         elif self.mode == "compound":
             self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
-                    x[covariate], x[self.cond_col]
+                    x[covariate], x[self.pert_col]
                 ]), axis = 1
             )
 
@@ -240,7 +241,8 @@ class PertBase:
         Extract the information of DE genes from `adata.uns`.
 
         Args:
-            key (str): the key corresponding to the information of DE genes.
+            key (str, optional):
+                the key corresponding to the information of DE genes.
 
         Returns:
             dict | None
@@ -269,15 +271,15 @@ class PertDataset(Dataset, PertBase):
     """
     Storing and indexing perturbation data.
 
-    Reference:
+    Reference for DE genes:
       https://github.com/snap-stanford/GEARS/blob/master/gears/pertdata.py#L512
     """
     num_de_genes: int = 20
     
     def __init__(self, x: ad.AnnData, y: ad.AnnData, vocab: GeneVocab) -> None:
         assert x.shape == y.shape, "x and y do not have the same shape!"
-        self.ctrl_adata = x
-        self.adata = y
+        self.ctrl_adata = self.x = x
+        self.adata = self.y = y
         self.vocab = vocab
 
         self._check_mode()
@@ -291,7 +293,7 @@ class PertDataset(Dataset, PertBase):
 
         if self.de_genes is None:
             de_idx = de_genes = [-1]
-        elif y_.obs[self.cond_col][0] == self.ctrl_str:
+        elif y_.obs[self.pert_col][0] == self.ctrl_str:
             de_idx = de_genes = [-1] * self.num_de_genes
         else:
             key = y_.obs[self.condition_name][0]  # e.g. "A549_FOXA3+ctrl_1+1"
@@ -339,6 +341,7 @@ class PertData(PertBase):
             self, dataset: str,
             workdir: Path = Path('data'),
             keep_ctrl: bool = True,
+            seed: int = 1,
             test_size: float = 0.1,
             vocab_file: Optional[Path] = None,
         ) -> None:
@@ -347,11 +350,13 @@ class PertData(PertBase):
         self.workdir = Path(workdir)
         if not self.workdir.exists():
             self.workdir.mkdir(parents=True)
-        self.keep_ctrl = keep_ctrl  # used for self.get_dataloader()
-        self.test_size = test_size  # used for self.get_dataloader()
+        self.keep_ctrl = keep_ctrl  # used for self.set_dataloader()
+        self.test_size = test_size  # used for self.set_dataloader()
 
+        np.random.seed(seed)
         self._load_adata()
         self._check_mode()
+        self.logger.info(f'mode = {repr(self.mode)}')
         self._drop_NA_genes()
         self.set_vocab(vocab_file)
 
@@ -451,28 +456,34 @@ class PertData(PertBase):
                 sc.get._get_obs_rep(self.adata, layer=key_to_process)
             )
             self.set_DE_genes()
+            self.logger.info('Calculated differentially expressed genes.')
             self.logger.info('Preprocessed adata.')
 
-    def get_dataloader(
+    def _create_dataset(self) -> PertDataset:
+        if self.ctrl_adata is None:
+            self.ctrl_adata = self.adata[
+                self.adata.obs[self.pert_col] == self.ctrl_str
+            ]
+
+        if self.keep_ctrl:
+            adata = self.adata
+        else:
+            adata = self.adata[
+                self.adata.obs[self.pert_col] != self.ctrl_str
+            ]
+
+        indices = np.random.randint(0, len(self.ctrl_adata), len(adata))
+        return PertDataset(self.ctrl_adata[indices, ], adata, self.vocab)
+
+    def set_dataloader(
             self, batch_size: int, test_batch_size: Optional[int] = None
         ) -> None:
         if test_batch_size is None:
             test_batch_size = batch_size
 
-        if self.ctrl_adata is None:
-            self.ctrl_adata = self.adata[
-                self.adata.obs[self.cond_col] == self.ctrl_str
-            ]
-
-        if not self.keep_ctrl:
-            self.adata = self.adata[
-                self.adata.obs[self.cond_col] != self.ctrl_str
-            ]
-
-        indices = np.random.randint(0, len(self.ctrl_adata), len(self.adata))
+        dataset = self._create_dataset()
         train_x, test_x, train_y, test_y = train_test_split(
-            self.ctrl_adata[indices, ], self.adata,
-            test_size=self.test_size, shuffle=True
+            dataset.x, dataset.y, test_size=self.test_size, shuffle=True
         )
         train_x, valid_x, train_y, valid_y = train_test_split(
             train_x, train_y, test_size=self.test_size, shuffle=True
@@ -494,41 +505,52 @@ class PertData(PertBase):
             'val_loader': val_loader,
             'test_loader': test_loader,
         }
-        self.logger.info('Got dataloader.')
+        self.logger.info('Created dataloader.')
 
-    def create_dataset_for_prediction(
-            self, perturbation: str, pool_size: int
+    def _create_dataset_for_prediction(
+            self, perturbation: str, pool_size: Optional[int] = None
         ) -> PertDataset:
         if self.ctrl_adata is None:
             self.ctrl_adata = self.adata[
-                self.adata.obs[self.cond_col] == self.ctrl_str
+                self.adata.obs[self.pert_col] == self.ctrl_str
             ]
+
+        if pool_size is None:
+            pool_size = len(self.ctrl_adata)
 
         indices = np.random.randint(0, len(self.ctrl_adata), pool_size)
         x = self.ctrl_adata[indices, ]
         fake_y = x.copy()
-        fake_y.obs[self.cond_col] = perturbation
         fake_y.obs[self.pert_col] = perturbation
 
         if self.mode == "gene":
             fake_y.obs['dose_val'] = fake_y.obs[
-                self.cond_col
+                self.pert_col
             ].apply(
                 lambda x: '1+1' if len(x.split('+')) == 2 else '1'
             )
             fake_y.obs[self.condition_name] = fake_y.obs.apply(
                 lambda x: '_'.join([
-                    x['cell_type'], x[self.cond_col], x['dose_val']
+                    x['cell_type'], x[self.pert_col], x['dose_val']
                 ]), axis = 1
             )
         elif self.mode == "compound":
             fake_y.obs[self.condition_name] = fake_y.obs.apply(
                 lambda x: '_'.join([
-                    x['cell_type'], x[self.cond_col]
+                    x['cell_type'], x[self.pert_col]
                 ]), axis = 1
             )
 
         return PertDataset(x, fake_y, self.vocab)
+
+    def get_dataloader_for_prediction(
+            self, test_batch_size: int, 
+            perturbation: str, pool_size: Optional[int] = None
+        ) -> DataLoader:
+        return DataLoader(
+            self._create_dataset_for_prediction(perturbation, pool_size),
+            batch_size=test_batch_size, shuffle=False,
+        )
 
     def get_pert_flags(self, condition: str) -> Optional[np.ndarray[int]]:
         """

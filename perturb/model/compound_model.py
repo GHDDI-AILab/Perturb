@@ -1,11 +1,11 @@
 import math
 from typing import Dict, Mapping, Optional, Tuple, Any, Union
 
-import torch
 import numpy as np
-from torch import nn, Tensor
+import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from torch import nn, Tensor
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.distributions import Bernoulli
 from flash_attn.flash_attention import FlashMHA
@@ -13,6 +13,7 @@ from tqdm import trange
 
 from .dsbn import DomainSpecificBatchNorm1d
 from .grad_reverse import grad_reverse
+from ..utils import create_logger
 
 from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 from torch_geometric.data import Data
@@ -56,6 +57,7 @@ class Transformer4Cmpd(nn.Module):
         pre_norm: bool = False,
     ):
         super().__init__()
+        self.logger = create_logger(name=self.__class__.__name__)
         self.model_type = "Transformer"
         self.d_model = d_model
         self.do_dab = do_dab
