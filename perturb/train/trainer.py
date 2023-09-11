@@ -13,11 +13,12 @@ import wandb
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import mean_squared_error as mse
 from torch import nn
 
-from .evaluate import compute_metrics
 from ..loss import masked_mse_loss, masked_relative_error
-from ..utils import create_logger
+from ..utils import create_logger, to_numpy
 from ..utils.attr_dict import AttrDict
 
 warnings.filterwarnings("ignore")
@@ -296,7 +297,7 @@ class Trainer:
 
     def predict_batch(
             self, batch_data, include_zero_gene: str|bool = True,
-        ) -> tuple[Optional[torch.Tensor|list]]:
+        ) -> dict[str, torch.Tensor]:
         """
         Predict a batch of data with the best model.
 
@@ -304,10 +305,9 @@ class Trainer:
             batch_data: a dictionary of input data with keys.
 
         Returns:
-            tuple[Optional[torch.Tensor | list]]:
-                pred_values,
-                target_values,
-                de_idx
+            An empty dict,
+            or a dict with the following keys:
+                genes, de_idx, values, target, pred.
         """
         self.model.eval()
         device = self.device
@@ -318,11 +318,12 @@ class Trainer:
             include_zero_gene=include_zero_gene,
         )
         if not tokenized_batch:
-            return None, None, None
+            return {}
 
         input_gene_ids = tokenized_batch['genes'].to(device)
         input_values = tokenized_batch['values'].to(device)
-        target_values = tokenized_batch.get('target_values')
+        target_values = (tokenized_batch['target_values'].to(device)
+                         if 'target_values' in tokenized_batch else None)
         if self.data.mode == "gene":
             input_pert = tokenized_batch['pert_flags'].to(device)
         elif self.data.mode == "compound":
@@ -350,9 +351,15 @@ class Trainer:
         #if not include_zero_gene:
         #    pred_values = torch.zeros_like(ori_gene_values)
         #    pred_values[:, input_gene_ids] = output_values
-        return pred_values, target_values, tokenized_batch.get('de_idx')
+        return {
+            "genes": input_gene_ids,
+            "de_idx": tokenized_batch.get('de_idx'),
+            "values": input_values,
+            "target": target_values,
+            "pred": pred_values,
+        }
 
-    def eval_perturb(self, loader) -> dict:
+    def eval_perturb(self, loader) -> dict[str, np.ndarray]:
         """
         Get the truth and prediction values using a given loader.
 
@@ -360,7 +367,7 @@ class Trainer:
             loader (torch.utils.data.DataLoader)
 
         Returns:
-            dict
+            dict[str, numpy.ndarray]
         """
         self.model.eval()
         pert_cat = []
@@ -369,32 +376,85 @@ class Trainer:
         truth = []
         pred_de = []
         truth_de = []
+        delta_pred = []
+        delta_truth = []
+        delta_pred_de = []
+        delta_truth_de = []
     
         with torch.no_grad():
             for idx, batch_data in enumerate(loader):
-                p, t, de = self.predict_batch(batch_data)
-                if p is None or t is None or de is None:
+                d = self.predict_batch(batch_data)
+                if not d or d["de_idx"] is None:
                     continue
 
-                pred.extend(p.cpu())
-                truth.extend(t.cpu())
+                delta_p = d["pred"] - d["values"]
+                delta_t = d["target"] - d["values"]
+
+                pred.extend(d["pred"])
+                truth.extend(d["target"])
+                delta_pred.extend(delta_p)
+                delta_truth.extend(delta_t)
                 pert_cat.extend(batch_data['y']['obs'][self.data.pert_col])
     
                 # Differentially expressed genes
-                for itr, de_idx in enumerate(de):
-                    pred_de.append(p[itr, de_idx])
-                    truth_de.append(t[itr, de_idx])
+                for itr, de_idx in enumerate(d["de_idx"]):
+                    pred_de.append(d["pred"][itr, de_idx])
+                    truth_de.append(d["target"][itr, de_idx])
+                    delta_pred_de.append(delta_p[itr, de_idx])
+                    delta_truth_de.append(delta_t[itr, de_idx])
     
         return {
-            "pred": torch.stack(pred).float().detach().cpu().numpy(),
-            "truth": torch.stack(truth).float().detach().cpu().numpy(),
-            "pred_de": torch.stack(pred_de).float().detach().cpu().numpy(),
-            "truth_de": torch.stack(truth_de).float().detach().cpu().numpy(),
             "pert_cat": np.array(pert_cat),
+            "pred": to_numpy(torch.stack(pred)),
+            "truth": to_numpy(torch.stack(truth)),
+            "pred_de": to_numpy(torch.stack(pred_de)),
+            "truth_de": to_numpy(torch.stack(truth_de)),
+            "delta_pred": to_numpy(torch.stack(delta_pred)),
+            "delta_truth": to_numpy(torch.stack(delta_truth)),
+            "delta_pred_de": to_numpy(torch.stack(delta_pred_de)),
+            "delta_truth_de": to_numpy(torch.stack(delta_truth_de)),
         }
 
+    def compute_metrics(self, results: dict) -> tuple[dict]:
+        metrics = {
+            "mse": [], "corr": [], "corr_delta": [],
+            "mse_de": [], "corr_de": [], "corr_delta_de": [],
+        }
+        metrics_pert = {}
+        for pert in np.unique(results["pert_cat"]):
+            if pert != self.data.ctrl_str:
+                metrics_pert[pert] = {}
+                idx = np.where(results["pert_cat"] == pert)[0]
+                mean = {key: results[key][idx].mean(axis=0)
+                        for key in results if key != "pert_cat"}
+
+                val = mse(mean["pred"], mean["truth"])
+                metrics_pert[pert]["mse"] = val
+                metrics["mse"].append(val)
+                val = pearsonr(mean["pred"], mean["truth"])[0]
+                metrics_pert[pert]["corr"] = 0 if np.isnan(val) else val
+                metrics["corr"].append(0 if np.isnan(val) else val)
+                val = pearsonr(mean["delta_pred"], mean["delta_truth"])[0]
+                metrics_pert[pert]["corr_delta"] = 0 if np.isnan(val) else val
+                metrics["corr_delta"].append(0 if np.isnan(val) else val)
+
+                val = mse(mean["pred_de"], mean["truth_de"])
+                metrics_pert[pert]["mse_de"] = val
+                metrics["mse_de"].append(val)
+                val = pearsonr(mean["pred_de"], mean["truth_de"])[0]
+                metrics_pert[pert]["corr_de"] = 0 if np.isnan(val) else val
+                metrics["corr_de"].append(0 if np.isnan(val) else val)
+                val = pearsonr(mean["delta_pred_de"], mean["delta_truth_de"])[0]
+                metrics_pert[pert]["corr_delta_de"] = 0 if np.isnan(val) else val
+                metrics["corr_delta_de"].append(0 if np.isnan(val) else val)
+
+        for key in metrics:
+            metrics[key] = np.mean(metrics[key])
+
+        return metrics, metrics_pert
+
     def eval_testdata(self) -> None:
-        test_metrics, test_pert_res = compute_metrics(
+        test_metrics, test_pert_metrics = self.compute_metrics(
             self.eval_perturb(self.test_loader)
         )
         # NOTE: mse and pearson corr here are computed for the 
@@ -403,12 +463,12 @@ class Trainer:
         self.logger.info(test_metrics)
         with open(self.save_dir / "test_metrics.json", "w") as f:
             json.dump(test_metrics, f, cls=MyJsonEncoder)
-        with open(self.save_dir / "test_pert_res.json", "w") as f:
-            json.dump(test_pert_res, f, cls=MyJsonEncoder)
+        with open(self.save_dir / "test_pert_metrics.json", "w") as f:
+            json.dump(test_pert_metrics, f, cls=MyJsonEncoder)
         
     def predict(
             self, pert_list: list[str], pool_size: Optional[int] = None
-        ) -> dict:
+        ) -> dict[str, np.ndarray]:
         """
         Predict gene expression values for the given perturbations.
 
@@ -419,7 +479,7 @@ class Trainer:
                 If `None`, use all control cells.
 
         Returns:
-            dict
+            dict[str, numpy.ndarray]
         """
         if self.data.mode == "gene":
             gene_list = self.data.adata.var[self.data.gene_col].tolist()
@@ -432,21 +492,21 @@ class Trainer:
 
         self.model.eval()
         with torch.no_grad():
-            results_pred = {}
+            results = {}
             for pert in pert_list:
-                loader = self.data.get_dataloader_for_prediction(
-                    self.config.eval_batch_size, pert, pool_size
-                )
-                preds = []
-                for batch_data in iter(loader):
-                    pred_gene_values, _, _ = self.predict_batch(
+                preds = [
+                    self.predict_batch(
                         batch_data,
                         include_zero_gene=self.config.include_zero_gene,
+                    )["pred"]
+                    for batch_data in iter(
+                        self.data.get_dataloader_for_prediction(
+                            self.config.eval_batch_size, pert, pool_size
+                        )
                     )
-                    preds.append(pred_gene_values)
-                preds = torch.cat(preds, dim=0).detach().cpu().numpy()
-                results_pred[pert] = np.mean(preds, axis=0)
-        return results_pred
+                ]
+                results[pert] = to_numpy(torch.cat(preds, dim=0)).mean(axis=0)
+            return results
 
     def plot_perturb(
         self, query: str, pool_size: int = None, save_file: Path = None

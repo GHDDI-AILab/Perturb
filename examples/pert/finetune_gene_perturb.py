@@ -11,7 +11,7 @@ import torch
 import argparse
 from pathlib import Path
 
-sys.path.append('../..')
+sys.path.insert(0, '../..')
 from perturb.data import PertData
 from perturb.model import TransformerGenerator
 from perturb.train import Trainer

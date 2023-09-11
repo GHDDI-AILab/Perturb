@@ -1,13 +1,9 @@
-import scanpy as sc
-from tqdm import tqdm
-import scipy.sparse as sp
+import re
 import numpy as np
 import scipy.stats as stats
-import re
-import json
-import pickle
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import mean_squared_error as mse
+from tqdm import tqdm
 
 def direction(predmeans,ctrlmeans,realmeans,genede_idx):
     predmeans =predmeans[genede_idx]

@@ -5,6 +5,9 @@ import requests
 from pathlib import Path
 from tqdm import tqdm
 
+#import numpy
+#import torch
+
 def create_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """
     Configure a logger with the specified name.
@@ -71,4 +74,16 @@ def get_type(x) -> str:
     """
     _type = str(type(x))
     return re.match("<class '(.+)'>", _type).groups()[0]
+
+def to_numpy(x):
+    """
+    Detach a PyTorch tensor with gradient to a numpy array.
+
+    Args:
+        x (torch.Tensor): the input PyTorch tensor.
+
+    Returns:
+        numpy.ndarray
+    """
+    return x.detach().cpu().numpy()
 

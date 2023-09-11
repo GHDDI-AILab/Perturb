@@ -707,6 +707,7 @@ class PertData(PertBase):
             else:
                 return {}
 
+            #TODO: pert flag for cell embedding in self.tokenize_and_pad_batch()
             pert = self.tokenize_and_pad_batch(
                 pert_tensor[:, input_gene_idx],
                 gene_ids[input_gene_idx],
