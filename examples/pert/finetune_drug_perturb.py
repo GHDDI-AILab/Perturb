@@ -1,4 +1,3 @@
-#!/home/cliang02/work/bin/cre-python
 '''
 Finetune the pretrained model for compound perturbation response prediction.
 '''
@@ -24,7 +23,7 @@ os.environ["WANDB_MODE"] = "online"
 def get_config():
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog='Contact: chen.liang@ghddi.org'
+        epilog='Contact: chen.liang@ghddi.org',
     )
     parser.add_argument("-c", "--config", required=True)
     args = parser.parse_args()
@@ -52,6 +51,7 @@ if __name__ == '__main__':
     pert_data = PertData(
         dataset=conf.h.p.dataset,
         keep_ctrl=False,
+        seed=conf.h.p.seed,
         test_size=conf.h.p.test_size,
         vocab_file=vocab_file,
     )
@@ -64,7 +64,7 @@ if __name__ == '__main__':
     )
     pert_data.set_dataloader(
         batch_size=conf.h.p.batch_size,
-        test_batch_size=conf.h.p.eval_batch_size
+        test_batch_size=conf.h.p.eval_batch_size,
     )
 
     trainer = Trainer(config=conf.h.p)

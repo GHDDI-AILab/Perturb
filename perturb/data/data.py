@@ -46,7 +46,6 @@ class PertBase:
 
         if set(["canonical_smiles",]).issubset(self.adata.obs.columns):
             self.mode = "compound"
-            self.gene_col = "symbol"
             #self.cond_col = "treatment"
             #self.ctrl_str = "S0000"
             self.pert_col = "canonical_smiles"
@@ -54,13 +53,20 @@ class PertBase:
             self.ctrl_group = "Vehicle"  # for calculate DE
         elif set(["condition",]).issubset(self.adata.obs.columns):
             self.mode = "gene"
-            self.gene_col = "gene_name"
             #self.cond_col = "condition"
             self.pert_col = "condition"
             self.ctrl_str = "ctrl"
             self.ctrl_group = "ctrl_1"  # for calculate DE
         else:
             raise ValueError("Cannot identify the pert mode!")
+
+        if "symbol" in self.adata.var.columns:
+            self.gene_col = "symbol"
+        else:
+            self.gene_col = "gene_name"
+
+        if self.gene_col not in self.adata.var.columns:
+            self.adata.var[self.gene_col] = self.adata.var.index
 
     def _drop_NA_genes(self) -> None:
         """
