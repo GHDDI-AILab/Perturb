@@ -2,11 +2,10 @@ __all__ = ['Trainer']
 
 import copy
 import gc
-import json
 import time
 import warnings
-from pathlib import Path
 from typing import Optional
+from pathlib import Path
 
 import torch
 import wandb
@@ -18,7 +17,7 @@ from sklearn.metrics import mean_squared_error as mse
 from torch import nn
 
 from ..loss import masked_mse_loss, masked_relative_error
-from ..utils import create_logger, to_numpy
+from ..utils import create_logger, to_numpy, write_json, write_pickle
 from ..utils.attr_dict import AttrDict
 
 warnings.filterwarnings("ignore")
@@ -27,17 +26,6 @@ def define_wandb_metrics():
     wandb.define_metric("valid/mse", summary="min", step_metric="epoch")
     wandb.define_metric("valid/mre", summary="min", step_metric="epoch")
     wandb.define_metric("test/corr", summary="max")
-
-class MyJsonEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        else:
-            return super().default(obj)
 
 class Trainer:
     def __init__(self, config: dict) -> None:
@@ -454,17 +442,18 @@ class Trainer:
         return metrics, metrics_pert
 
     def eval_testdata(self) -> None:
-        test_metrics, test_pert_metrics = self.compute_metrics(
-            self.eval_perturb(self.test_loader)
-        )
+        preds_and_truths = self.eval_perturb(self.test_loader)
+        write_pickle(preds_and_truths,
+                     self.save_dir / 'preds_and_truths.pkl.xz')
         # NOTE: mse and pearson corr here are computed for the 
         # mean pred expressions vs. the truth mean across all genes.
         # Further, one can compute the distance of two distributions.        
+        test_metrics, test_pert_metrics = self.compute_metrics(preds_and_truths)
         self.logger.info(test_metrics)
-        with open(self.save_dir / "test_metrics.json", "w") as f:
-            json.dump(test_metrics, f, cls=MyJsonEncoder)
-        with open(self.save_dir / "test_pert_metrics.json", "w") as f:
-            json.dump(test_pert_metrics, f, cls=MyJsonEncoder)
+        write_json(test_metrics,
+                   self.save_dir / 'test_metrics.json.xz')
+        write_json(test_pert_metrics,
+                   self.save_dir / 'test_pert_metrics.json.xz')
         
     def predict(
             self, pert_list: list[str], pool_size: Optional[int] = None
