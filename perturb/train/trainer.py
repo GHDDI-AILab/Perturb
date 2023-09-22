@@ -17,6 +17,7 @@ from sklearn.metrics import mean_squared_error as mse
 from torch import nn
 
 from ..loss import masked_mse_loss, masked_relative_error
+from ..metrics import plot_corr_matrix
 from ..utils import create_logger, to_numpy, write_json, write_pickle
 from ..utils.attr_dict import AttrDict
 
@@ -360,6 +361,7 @@ class Trainer:
         self.model.eval()
         pert_cat = []
         logvar = []  # if uncertainty
+        de = []
         pred = []
         truth = []
         pred_de = []
@@ -375,6 +377,9 @@ class Trainer:
                 if not d or d["de_idx"] is None:
                     continue
 
+                pert_cat.extend(batch_data['y']['obs'][self.data.pert_col])
+                de.extend(d["de_idx"])
+
                 delta_p = d["pred"] - d["values"]
                 delta_t = d["target"] - d["values"]
 
@@ -382,7 +387,6 @@ class Trainer:
                 truth.extend(d["target"])
                 delta_pred.extend(delta_p)
                 delta_truth.extend(delta_t)
-                pert_cat.extend(batch_data['y']['obs'][self.data.pert_col])
     
                 # Differentially expressed genes
                 for itr, de_idx in enumerate(d["de_idx"]):
@@ -393,6 +397,7 @@ class Trainer:
     
         return {
             "pert_cat": np.array(pert_cat),
+            "de_idx": to_numpy(torch.stack(de)),
             "pred": to_numpy(torch.stack(pred)),
             "truth": to_numpy(torch.stack(truth)),
             "pred_de": to_numpy(torch.stack(pred_de)),
@@ -403,53 +408,143 @@ class Trainer:
             "delta_truth_de": to_numpy(torch.stack(delta_truth_de)),
         }
 
-    def compute_metrics(self, results: dict) -> tuple[dict]:
-        metrics = {
-            "mse": [], "corr": [], "corr_delta": [],
-            "mse_de": [], "corr_de": [], "corr_delta_de": [],
+    @staticmethod
+    def reshape_results(
+            results: dict[str, np.ndarray]
+        ) -> dict[str, dict[str, np.ndarray]]:
+        """
+        Reshape the results of self.eval_perturb() for further use.
+        
+        Args:
+            results (dict[str, numpy.ndarray]):
+                the output dict of self.eval_perturb()
+        
+        Returns:
+            dict[str, dict[str, numpy.ndarray]:
+                the outer dict with original keys
+                the inner dict with perturbations as keys
+        """
+        pert_key = "pert_cat"
+        return {
+            key: {
+                pert: results[key][np.where(results[pert_key] == pert)[0]]
+                for pert in np.unique(results[pert_key])
+            }
+            for key in results if key != pert_key
         }
-        metrics_pert = {}
-        for pert in np.unique(results["pert_cat"]):
-            if pert != self.data.ctrl_str:
-                metrics_pert[pert] = {}
-                idx = np.where(results["pert_cat"] == pert)[0]
-                mean = {key: results[key][idx].mean(axis=0)
-                        for key in results if key != "pert_cat"}
 
-                val = mse(mean["pred"], mean["truth"])
-                metrics_pert[pert]["mse"] = val
-                metrics["mse"].append(val)
-                val = pearsonr(mean["pred"], mean["truth"])[0]
-                metrics_pert[pert]["corr"] = 0 if np.isnan(val) else val
-                metrics["corr"].append(0 if np.isnan(val) else val)
-                val = pearsonr(mean["delta_pred"], mean["delta_truth"])[0]
-                metrics_pert[pert]["corr_delta"] = 0 if np.isnan(val) else val
-                metrics["corr_delta"].append(0 if np.isnan(val) else val)
+    def corr_heatmaps(
+            self, results: dict[str, dict[str, np.ndarray]]
+        ) -> dict[str, dict[str, np.ndarray]]:
+        """
+        Compute and plot the correlation matrices of 
+        the truth and prediction values, respectively.
 
-                val = mse(mean["pred_de"], mean["truth_de"])
-                metrics_pert[pert]["mse_de"] = val
-                metrics["mse_de"].append(val)
-                val = pearsonr(mean["pred_de"], mean["truth_de"])[0]
-                metrics_pert[pert]["corr_de"] = 0 if np.isnan(val) else val
-                metrics["corr_de"].append(0 if np.isnan(val) else val)
-                val = pearsonr(mean["delta_pred_de"], mean["delta_truth_de"])[0]
-                metrics_pert[pert]["corr_delta_de"] = 0 if np.isnan(val) else val
-                metrics["corr_delta_de"].append(0 if np.isnan(val) else val)
+        Args:
+            results (dict[str, dict[str, numpy.ndarray]]):
+                the reshaped results
 
-        for key in metrics:
-            metrics[key] = np.mean(metrics[key])
+        Returns:
+            dict[str, dict[str, numpy.ndarray]]:
+                a dict of dicts with correlation matrices
+        """
+        corr1 = plot_corr_matrix(
+            results['truth'].values(),
+            results['pred'].values(),
+            results['pred'].keys(),
+            save_path=self.save_dir / 'Corr_Heatmaps_allgenes.png'
+        )
+        wandb.log({'Heatmaps': [wandb.Image(
+            corr1.pop('fig'), caption='Corr heatmaps, all genes'
+        )]})
+        corr2 = plot_corr_matrix(
+            results['delta_truth'].values(),
+            results['delta_pred'].values(),
+            results['delta_pred'].keys(),
+            save_path=self.save_dir / 'Corr_Heatmaps_delta_allgenes.png'
+        )
+        wandb.log({'Heatmaps, delta': [wandb.Image(
+            corr2.pop('fig'), caption='Corr heatmaps of delta values, all genes'
+        )]})
+        return {'allgenes': corr1, 'delta_allgenes': corr2}
 
-        return metrics, metrics_pert
+    def compute_metrics(
+            self, results: dict[str, dict[str, np.ndarray]]
+        ) -> tuple[dict]:
+        """
+        Compute the MSE and correlations between the truth
+        and prediction values perturbation by perturbation.
+
+        Args:
+            results (dict[str, dict[str, numpy.ndarray]]):
+                the reshaped results
+
+        Returns:
+            tuple[dict]:
+                metrics_overall and metrics_pert
+        """
+        perts: list = list({
+            pert: 0 for key in results for pert in results[key]
+            if pert != self.data.ctrl_str
+        })  # Use dict instead of set to avoid a wrong order
+        mean: dict[str, dict[str, np.ndarray]] = {
+            key: {
+                pert: np.mean(results[key][pert], axis=0)
+                for pert in perts
+            }
+            for key in results
+        }
+        ## create metrics_pert:
+        _: dict[str, dict[str, float]] = {
+            pert: {
+                'mse': mse(mean['pred'][pert],
+                           mean['truth'][pert]),
+                'corr': pearsonr(mean['pred'][pert],
+                                 mean['truth'][pert])[0],
+                'corr_delta': pearsonr(mean['delta_pred'][pert],
+                                       mean['delta_truth'][pert])[0],
+                'mse_de': mse(mean['pred_de'][pert],
+                              mean['truth_de'][pert]),
+                'corr_de': pearsonr(mean['pred_de'][pert],
+                                    mean['truth_de'][pert])[0],
+                'corr_delta_de': pearsonr(mean['delta_pred_de'][pert],
+                                          mean['delta_truth_de'][pert])[0],
+            }
+            for pert in perts
+        }
+        # remove NaN values
+        metrics_pert: dict[str, dict[str, float]] = {
+            pert: {
+                key: 0 if np.isnan(_[pert][key]) else _[pert][key]
+                for key in _[pert]
+            }
+            for pert in _
+        }
+        ## create metrics_overall:
+        keys: list = list({
+            key: 0 for pert in metrics_pert for key in metrics_pert[pert]
+        })
+        metrics_overall: dict[str, float] = {
+            key: np.mean([
+                metrics_pert[pert][key] for pert in metrics_pert
+            ])
+            for key in keys
+        }
+        return metrics_overall, metrics_pert
 
     def eval_testdata(self) -> None:
         preds_and_truths = self.eval_perturb(self.test_loader)
-        write_pickle(preds_and_truths,
-                     self.save_dir / 'preds_and_truths.pkl.xz')
+        results = self.reshape_results(preds_and_truths)
+        coef = self.corr_heatmaps(results)
+        test_metrics, test_pert_metrics = self.compute_metrics(results)
         # NOTE: mse and pearson corr here are computed for the 
         # mean pred expressions vs. the truth mean across all genes.
-        # Further, one can compute the distance of two distributions.        
-        test_metrics, test_pert_metrics = self.compute_metrics(preds_and_truths)
+        # Further, one can compute the distance of two distributions.
         self.logger.info(test_metrics)
+        write_pickle(preds_and_truths,
+                     self.save_dir / 'preds_and_truths.pkl.xz')
+        write_pickle(coef,
+                     self.save_dir / 'pert_corr_matrix.pkl.xz')
         write_json(test_metrics,
                    self.save_dir / 'test_metrics.json.xz')
         write_json(test_pert_metrics,
@@ -498,7 +593,7 @@ class Trainer:
             return results
 
     def plot_perturb(
-        self, query: str, pool_size: int = None, save_file: Path = None
+        self, query: str, pool_size: int = None, save_file: str = None
     ):
         sns.set_theme(
             style="ticks", rc={"axes.facecolor": (0, 0, 0, 0)}, font_scale=1.5
@@ -546,8 +641,10 @@ class Trainer:
         sns.despine()
     
         if save_file:
-            plt.savefig(save_file, bbox_inches="tight", transparent=False)
-        # plt.show()
+            save_path = self.save_dir / Path(save_file).name
+            plt.savefig(save_path, bbox_inches="tight", transparent=False)
+        else:
+            plt.show()
 
     def save_checkpoint(self) -> None:
         best_model_file = self.save_dir / "best_model.pt"

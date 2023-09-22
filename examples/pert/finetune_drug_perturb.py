@@ -115,10 +115,7 @@ if __name__ == '__main__':
     trainer.fit()
     trainer.eval_testdata()
     for pert in perts_to_plot:
-        trainer.plot_perturb(
-            pert, pool_size=300,
-            save_file=trainer.save_dir / f"{pert}.png"
-        )
+        trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
     trainer.save_checkpoint()
     trainer.finish()
 
