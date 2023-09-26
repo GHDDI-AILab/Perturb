@@ -568,16 +568,15 @@ class PertData(PertBase):
         Returns:
             np.ndarray[int] | None
         """
-        gene_ids = self.get_gene_ids()
-        pert_ids = [self.vocab[g]
-                    for g in condition.split('+') if g != self.ctrl_str]
-        #TODO: make pert_ids always a subset of gene_ids
-        if not set(pert_ids).issubset(gene_ids):
+        genes = self.adata.var[self.gene_col].tolist()
+        perts = [g for g in condition.split('+') if g != self.ctrl_str]
+        #TODO: make perts always a subset of genes
+        if not set(perts).issubset(genes):
             return None
-        elif not len(pert_ids):
-            return np.full(len(gene_ids), self.pert_pad_id, dtype=int)
+        elif not len(perts):
+            return np.full(len(genes), self.pert_pad_id, dtype=int)
         else:
-            return np.where(np.isin(gene_ids, pert_ids),
+            return np.where(np.isin(genes, perts),
                             self.crispr_flag, self.ctrl_flag)
 
     def tokenize_and_pad_batch(
