@@ -75,7 +75,8 @@ class PertBase:
         Returns:
             None
         """
-        self.adata = self.adata[:, self.adata.var.dropna().index]
+        self.adata = self.adata[:,
+            self.adata.var.dropna(subset=[self.gene_col]).index]
 
     def _set_non_dropout_non_zero_genes(
             self, key: Optional[str] = None

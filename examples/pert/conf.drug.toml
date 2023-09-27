@@ -66,7 +66,7 @@ schedule_ratio = 0.9  # ratio of epochs for learning rate schedule
 [ p.p ]  # Preprocessing
 
 use_key = "X"
-filter_gene_by_counts = 3       # Step 1
+filter_gene_by_counts = false   # Step 1
 filter_cell_by_counts = false   # Step 2
 normalize_total = 1e4           # Step 3: whether to normalize the raw data and to what sum
 result_normed_key = "X_normed"  # the key in adata.layers to store the normalized data
