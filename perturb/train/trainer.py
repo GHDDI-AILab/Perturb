@@ -1,6 +1,5 @@
 __all__ = ['Trainer']
 
-import copy
 import gc
 import time
 import warnings
@@ -278,7 +277,7 @@ class Trainer:
         
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.best_model = copy.deepcopy(self.model)
+                self.best_model = self.model
                 self.best_model_epoch = epoch
                 self.logger.info(f"Best model with score {best_val_loss:5.4f}")
 
