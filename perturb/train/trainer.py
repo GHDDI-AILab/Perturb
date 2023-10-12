@@ -612,8 +612,8 @@ class Trainer:
             de_idx.append(np.where(self.data.adata.var.index == i)[0][0])
             genes.append(id2gene[i])
         
-        pred = self.predict([query], pool_size=pool_size)
-        pred = pred[query][de_idx]
+        pred = self.predict([query], pool_size=pool_size
+            )[query][np.array(de_idx) + int(self.config.GEPC)]
         truth = self.data.adata[
             self.data.adata.obs[self.data.pert_col] == query
         ].X.A[:, de_idx]

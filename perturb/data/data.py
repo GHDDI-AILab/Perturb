@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore")
 
 class PertBase:
     """A base class for perturbation data classes."""
+    num_de_genes: int = 20
     key_de_genes: str = "rank_genes_groups_cov_all"
     condition_name: str = "condition_name"
 
@@ -201,10 +202,12 @@ class PertBase:
         control_group = self.ctrl_group
 
         if self.mode == "gene":
-            self.adata.obs['control'] = self.adata.obs[self.pert_col
-                ].apply(lambda x: 0 if len(x.split('+')) == 2 else 1)
-            self.adata.obs['dose_val'] = self.adata.obs[self.pert_col
-                ].apply(lambda x: '1+1' if len(x.split('+')) == 2 else '1')
+            self.adata.obs['control'] = self.adata.obs[self.pert_col].apply(
+                lambda x: 0 if len(x.split('+')) == 2 else 1
+            )
+            self.adata.obs['dose_val'] = self.adata.obs[self.pert_col].apply(
+                lambda x: '1+1' if len(x.split('+')) == 2 else '1'
+            )
             self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
                     x[covariate], x[self.pert_col], x['dose_val']
@@ -281,7 +284,6 @@ class PertDataset(Dataset, PertBase):
     Reference for DE genes:
       https://github.com/snap-stanford/GEARS/blob/master/gears/pertdata.py#L512
     """
-    num_de_genes: int = 20
     
     def __init__(self, x: ad.AnnData, y: ad.AnnData, vocab: GeneVocab) -> None:
         assert x.shape == y.shape, "x and y do not have the same shape!"
@@ -531,9 +533,7 @@ class PertData(PertBase):
         fake_y.obs[self.pert_col] = perturbation
 
         if self.mode == "gene":
-            fake_y.obs['dose_val'] = fake_y.obs[
-                self.pert_col
-            ].apply(
+            fake_y.obs['dose_val'] = fake_y.obs[self.pert_col].apply(
                 lambda x: '1+1' if len(x.split('+')) == 2 else '1'
             )
             fake_y.obs[self.condition_name] = fake_y.obs.apply(
@@ -674,6 +674,16 @@ class PertData(PertBase):
         """
         Tokenize and pad a batch of data.
 
+        Args:
+            batch_data (dict):
+                a batch of data
+            max_len (int):
+                the maximum length of output columns (default: None)
+            append_cls (bool):
+                whether to append cell embedding (default: True)
+            include_zero_gene (bool):
+                whether to include zero genes (default: True)
+
         Returns:
             dict[str, torch.Tensor]:
                 for gene perturbations, the keys will be:
@@ -745,6 +755,9 @@ class PertData(PertBase):
             include_zero_gene=include_zero_gene,
         )
         y['target_values'] = y.pop('values').float()
-        de = {'de_idx': batch_data['de_idx'][row_idx]} if return_de_idx else {}
+        if return_de_idx:
+            de = {'de_idx': batch_data['de_idx'][row_idx] + int(append_cls)}
+        else:
+            de = {}
         return pert|x|y|de
 
