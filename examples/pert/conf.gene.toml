@@ -2,22 +2,22 @@
 
 project = "Perturb"
 dataset = "adamson"
-split = "simulation"
+#split = "simulation"
 seed = 42
 
 # settings for data prcocessing
-mask_ratio = 0.4
-mask_value = -1
-special_tokens = ["<pad>", "<cls>", "<eoc>"]
-cls_token = "<cls>"
+#mask_ratio = 0.4
+#mask_value = -1
+#special_tokens = ["<pad>", "<cls>", "<eoc>"]
+#cls_token = "<cls>"
 pad_token = "<pad>"
 pad_value  = -2  # 0 or -2
 pert_pad_id = 2
-n_bins = 51
+#n_bins = 51
 include_zero_gene = "all"  # include zero expr genes in training input: "all", "batch-wise", "row-wise", or False
 n_hvg = 0  # number of highly variable genes
 max_seq_len = 1500  # n_hvg+1 if n_hvg > 0
-per_seq_batch_sample = true
+#per_seq_batch_sample = true
 
 # settings for training
 MLM = true    # Whether to use masked language modeling, currently it is always on.
@@ -35,7 +35,7 @@ mvc_decoder_style = "inner product, detach"
 use_batch_labels = false
 
 do_train = true
-epochs = 1
+epochs = 15
 batch_size = 64
 eval_batch_size = 16
 early_stop = 5

@@ -84,7 +84,6 @@ if __name__ == '__main__':
         do_dab=conf.h.p.DAB,
         use_batch_labels=conf.h.p.use_batch_labels,
         domain_spec_batchnorm=conf.h.p.DSBN,
-        n_input_bins=conf.h.p.n_bins,
         ecs_threshold=conf.h.p.ecs_threshold,
         explicit_zero_prob=conf.h.p.explicit_zero_prob,
         pre_norm=conf.h.p.pre_norm,
@@ -94,28 +93,44 @@ if __name__ == '__main__':
     )
     if conf.h.p.load_model:
         model_file = Path(conf.h.p.load_model) / 'best_model.pt'
-        try:
-            model.load_state_dict(torch.load(model_file, trainer.device))
-            model.logger.info(f"Loading all model params from {model_file}")
-        except:
-            # only load params that are in the model and match the size
+        if conf.h.p.load_param_prefixes:
+            # only load params that start with the prefix
             model_dict = model.state_dict()
             pretrained_dict = torch.load(model_file, trainer.device)
             pretrained_dict = {
                 k: v for k, v in pretrained_dict.items()
-                if k in model_dict and v.shape == model_dict[k].shape
+                if any([k.startswith(prefix) for prefix in conf.h.p.load_param_prefixes])
             }
             for k, v in pretrained_dict.items():
                 model.logger.info(f"Loading params {k} with shape {v.shape}")
             model_dict.update(pretrained_dict)
-            model.load_state_dict(model_dict)
+            model.load_state_dict(model_dict, strict=False)
+        else:
+            try:
+                model.load_state_dict(torch.load(model_file, trainer.device))
+                model.logger.info(f"Loading all model params from {model_file}")
+            except:
+                # only load params that are in the model and match the size
+                model_dict = model.state_dict()
+                pretrained_dict = torch.load(model_file, trainer.device)
+                pretrained_dict = {
+                    k: v for k, v in pretrained_dict.items()
+                    if k in model_dict and v.shape == model_dict[k].shape
+                }
+                for k, v in pretrained_dict.items():
+                    model.logger.info(f"Loading params {k} with shape {v.shape}")
+                model_dict.update(pretrained_dict)
+                model.load_state_dict(model_dict)
 
     trainer.prepare_data(pert_data)
     trainer.prepare_model(model)
     trainer.fit()
     trainer.eval_testdata()
     for pert in perts_to_plot:
-        trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
+        try:
+            trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
+        except:
+            pass
     trainer.save_checkpoint()
     trainer.finish()
 

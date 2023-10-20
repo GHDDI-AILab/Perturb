@@ -170,13 +170,14 @@ class Transformer4Cmpd(nn.Module):
     ) -> Tensor:
         self._check_batch_labels(batch_labels)
 
+        assert src.shape == values.shape
         src = self.encoder(src)  # (batch, seq_len, embsize)
         self.cur_gene_token_embs = src
 
         values = self.value_encoder(values)  # (batch, seq_len, embsize)
-        smiles_src = self.cmpd_encoder(
-            smiles_src, device=next(self.parameters()).device
-        )
+        smiles_src = self.cmpd_encoder(smiles_src,
+                                       seq_len=values.shape[1],
+                                       device=next(self.parameters()).device)
         if self.input_emb_style == "scaling":
             values = values.unsqueeze(2)
             total_embs = src * values
@@ -773,9 +774,9 @@ class CompoundEncoder(nn.Module):
             smiles = smiles_dataset[item_idx]
             # simles = preprocess_smiles(smiles)
             tokenized_seq_compound = []
-            # if smiles.isdigit(): # input  value: invalid(compound ID)                
+            # if smiles.isdigit():  # input value: invalid(compound ID)
 
-            try: # input value: valid SMILES
+            try:  # input value: valid SMILES
                 molecule = Chem.MolFromSmiles(smiles)
                 molecule = canonicalize_molecule(molecule)
                 atom_feats = []
@@ -784,7 +785,7 @@ class CompoundEncoder(nn.Module):
                         if '<unk>' in self.atom_dict:
                             tokenized_seq_compound.append(self.atom_dict['<unk>'])
                         else:
-                            tokenized_seq_compound.append(len(self.atom_dict))    # OOV
+                            tokenized_seq_compound.append(len(self.atom_dict))  # OOV
                     else:
                         atom_feats.append(atom_features(atom))
                         tokenized_seq_compound.append(self.atom_dict[atom.GetSymbol()])
@@ -793,14 +794,14 @@ class CompoundEncoder(nn.Module):
                     atom_feats[i].append(each_xs)
                 tokenized_seq_compound = atom_feats
                 
-                if n_compound == 1: #for single atom
+                if n_compound == 1:  # for single atom
                     edge_list_compound = [(0,0)]
                 else:
                     edge_list_compound = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in molecule.GetBonds()]
             except:
                 print(f"invalid SMILES: {smiles}")
-                smiles_sample_unk = len(self.atom_dict) + 1 #use extra number for embeddqing
-                smiles ='O' # set the invalid smiles as H2O but the atomic number is len(atom_dict) + 1
+                smiles_sample_unk = len(self.atom_dict) + 1  # use extra number for embeddqing
+                smiles ='O'  # set the invalid smiles as H2O but the atomic number is len(atom_dict) + 1
                 molecule = Chem.MolFromSmiles(smiles)
                 molecule = canonicalize_molecule(molecule)
                 atom_feats = []
@@ -809,7 +810,7 @@ class CompoundEncoder(nn.Module):
                         if '<unk>' in self.atom_dict:
                             tokenized_seq_compound.append(self.atom_dict['<unk>'])
                         else:
-                            tokenized_seq_compound.append(len(self.atom_dict))    # OOV
+                            tokenized_seq_compound.append(len(self.atom_dict))  # OOV
                     else:
                         atom_feats.append(atom_features(atom))
                         tokenized_seq_compound.append(smiles_sample_unk)
@@ -817,7 +818,7 @@ class CompoundEncoder(nn.Module):
                 for i, each_xs in enumerate(tokenized_seq_compound):
                     atom_feats[i].append(each_xs)
                 tokenized_seq_compound = atom_feats
-                if n_compound == 1: #for single atom
+                if n_compound == 1:  # for single atom
                     edge_list_compound = [(0,0)]
                 else:
                     edge_list_compound = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in molecule.GetBonds()]
@@ -836,8 +837,7 @@ class CompoundEncoder(nn.Module):
         batch_data = batch_data_compound
         return batch_data
 
-    def forward(self, x: Tensor) -> Tensor:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def forward(self, x: Tensor, seq_len: int, device: torch.device) -> Tensor:
         data_list = self._compoundfeatures(x)
         x_embeddings = []
         for data in data_list:
@@ -863,7 +863,7 @@ class CompoundEncoder(nn.Module):
             x_mlp = self.mlp(x_gnn)
             # Apply global mean pooling to aggregate node features into a single vector
             x_global_pool = global_mean_pool(x_mlp, torch.zeros(x_mlp.size(0), dtype=torch.long, device=device))
-            x_embedding = x_global_pool.expand(1201,-1)
+            x_embedding = x_global_pool.expand(seq_len, -1)
             x_embedding_mlp = self.mlp(x_embedding)
             x_embeddings.append(x_embedding_mlp)
         x_embeddings = torch.stack(x_embeddings)  # Stack all graph embeddings into a single tensor

@@ -45,7 +45,7 @@ if __name__ == '__main__':
         vocab_file = None
 
     perts_to_plot = [
-        "CREB1+ctrl",
+        "ARHGAP22+ctrl",
         "KCTD16+ctrl",
     ]
     pert_data = PertData(
@@ -117,7 +117,10 @@ if __name__ == '__main__':
     trainer.fit()
     trainer.eval_testdata()
     for pert in perts_to_plot:
-        trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
+        try:
+            trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
+        except:
+            pass
     trainer.save_checkpoint()
     trainer.finish()
 
