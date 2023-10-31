@@ -197,7 +197,10 @@ class Transformer4Cmpd(nn.Module):
         output = self.transformer_encoder(
             total_embs, src_key_padding_mask=src_key_padding_mask
         )
-        return output  # (batch, seq_len, embsize)
+        try:
+            return smiles_src, output  # (batch, seq_len, embsize)
+        except:
+            return output  # (batch, seq_len, embsize)
 
     def _get_cell_emb_from_layer(
         self, layer_output: Tensor, weights: Tensor = None
@@ -346,14 +349,14 @@ class Transformer4Cmpd(nn.Module):
         Returns:
             dict of output Tensors.
         """
-        transformer_output = self._encode(
+        smiles_embs, transformer_output = self._encode(
             src, values, smiles_src, src_key_padding_mask, batch_labels
         )
         if self.use_batch_labels:
             batch_emb = self.batch_encoder(batch_labels)  # (batch, embsize)
 
         output = {}
-        mlm_output = self.decoder(
+        first_mlp_features, mlm_output = self.decoder(
             transformer_output
             if not self.use_batch_labels
             else torch.cat(
@@ -441,7 +444,10 @@ class Transformer4Cmpd(nn.Module):
         if self.do_dab:
             output["dab_output"] = self.grad_reverse_discriminator(cell_emb)
 
-        return output
+        try:
+            return smiles_embs, transformer_output, first_mlp_features, output
+        except:
+            return output
 
     def encode_batch(
         self,
@@ -1022,13 +1028,14 @@ class ExprDecoder(nn.Module):
 
     def forward(self, x: Tensor) -> Dict[str, Tensor]:
         """x is the output of the transformer, (batch, seq_len, d_model)"""
+        first_linear_output = self.fc[0](x).squeeze(-1)  # (batch, seq_len)
         pred_value = self.fc(x).squeeze(-1)  # (batch, seq_len)
 
         if not self.explicit_zero_prob:
-            return dict(pred=pred_value)
+            return first_linear_output, dict(pred=pred_value)
         zero_logits = self.zero_logit(x).squeeze(-1)  # (batch, seq_len)
         zero_probs = torch.sigmoid(zero_logits)
-        return dict(pred=pred_value, zero_probs=zero_probs)
+        return first_linear_output, dict(pred=pred_value, zero_probs=zero_probs)
         # TODO: note that the return currently is only for training. Since decoder
         # is not used in the test setting for the integration task, the eval/inference
         # logic is not implemented yet. However, remember to implement it when
@@ -1211,3 +1218,25 @@ class AdversarialDiscriminator(nn.Module):
         for layer in self._decoder:
             x = layer(x)
         return self.out_layer(x)
+
+class SiameseNetwork(nn.Module):
+    def __init__(self, transformer_model):
+        super(SiameseNetwork, self).__init__()
+        self.transformer = transformer_model
+
+    def forward_one(self, input_gene_ids, input_values, smiles_comps, src_key_padding_mask):
+        # Forward pass for one input
+        features_gat, features_transfomer, features_mlp, output_dict = self.transformer(input_gene_ids, input_values, smiles_comps, src_key_padding_mask)
+        prediction = output_dict
+        return features_gat, features_transfomer, features_mlp, prediction
+    
+
+    def forward(self, input1, input2):
+        # Unpack the inputs
+        input_gene_ids1, input_values1, smiles_comps1, src_key_padding_mask1 = input1
+        input_gene_ids2, input_values2, smiles_comps2, src_key_padding_mask2 = input2
+
+        # Forward pass for both inputs
+        features_gat1, features_transfomer1, features_mlp1, prediction1 = self.forward_one(input_gene_ids1, input_values1, smiles_comps1, src_key_padding_mask1)
+        features_gat2, features_transfomer2, features_mlp2, prediction2 = self.forward_one(input_gene_ids2, input_values2, smiles_comps2, src_key_padding_mask2)
+        return features_gat1, features_transfomer1, features_mlp1, features_gat2, features_transfomer2, features_mlp2,  prediction1, prediction2

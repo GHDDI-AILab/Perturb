@@ -180,3 +180,51 @@ def delta_cosine_loss(control: torch.Tensor, output: torch.Tensor, target: torch
 
     # Average the losses across the batch
     return cos_loss
+
+def contrastive_loss_multilayer(features_gat1: torch.Tensor, features_gat2: torch.Tensor, 
+                                features_transformer1: torch.Tensor, features_transformer2: torch.Tensor,
+                                first_mlp_features1: torch.Tensor, first_mlp_features2: torch.Tensor,
+                                is_same_smiles: torch.Tensor,
+                                margin: float = 5.0, weights = (0.4, 0.3, 0.3), mask= None,) -> torch.Tensor:
+    """
+    Compute the contrastive loss across multiple layers.
+
+    :param features_gat1, features_gat2: Features from GAT encoding for the two inputs.
+    :param features_transformer1, features_transformer2: Features from Transformer layer for the two inputs.
+    :param is_same_smiles: A tensor indicating if the two inputs have the same SMILES.
+    :param margin: The margin for contrastive loss.
+    :param weights: The weights for combining the contrastive losses from each feature layer.
+    :return: The combined contrastive loss.
+    """
+    
+    # Helper function to compute the contrastive loss for a pair of features
+    def single_contrastive_loss(features1: torch.Tensor, features2: torch.Tensor, is_same_smiles: torch.Tensor, margin: float, mask = None) -> torch.Tensor:
+        
+        euclidean_distance = torch.norm(features1 - features2, dim=-1)
+        # euclidean_distance = (features1 - features2).pow(2).sum(1)
+        if mask is None:
+            mask = torch.ones_like(euclidean_distance)  # Assuming features are of shape [batch_size, seq_len, feature_dim]
+        
+        # Apply the mask to the euclidean_distance
+        euclidean_distance = euclidean_distance * mask    
+        # Convert is_same_smiles to float for computation
+        is_same_smiles_float = is_same_smiles.float().unsqueeze(1)
+
+        # Compute the loss for same and different smiles
+        same_smiles_loss = euclidean_distance
+        different_smiles_loss = torch.clamp(margin - euclidean_distance, min=0.0)
+
+        # Combine the two losses based on the is_same_smiles tensor
+        combined_loss = is_same_smiles_float * same_smiles_loss + (1 - is_same_smiles_float) * different_smiles_loss
+
+        return combined_loss
+
+    # Compute the contrastive losses for each feature layer
+    loss_gat = single_contrastive_loss(features_gat1, features_gat2, is_same_smiles, margin, mask)
+    loss_transformer = single_contrastive_loss(features_transformer1, features_transformer2, is_same_smiles, margin, mask)
+    loss_mlp = single_contrastive_loss(first_mlp_features1, first_mlp_features2, is_same_smiles, margin, mask)
+
+    # Combine the contrastive losses with the given weights
+    mean_loss = weights[0] * loss_gat + weights[1] * loss_transformer + weights[2] * loss_mlp
+
+    return mean_loss
