@@ -81,6 +81,13 @@ class Trainer:
     def prepare_batch(self, *args, **kwargs) -> dict:
         return self.data.get_tokenized_batch(*args, **kwargs)
 
+    @staticmethod
+    def get_output_dict(output: dict|tuple) -> dict:
+        if isinstance(output, tuple):
+            return output[-1]
+        else:
+            return output
+
     def fit_epoch(self, epoch: int) -> None:
         self.model.train()
         device = self.device
@@ -113,7 +120,7 @@ class Trainer:
                 self.data.vocab[self.data.pad_token]
             )
             with torch.cuda.amp.autocast(enabled=self.config.amp):
-                output_dict = self.model(
+                output_dict = self.get_output_dict(self.model(
                     input_gene_ids,
                     input_values,
                     input_pert,
@@ -122,7 +129,7 @@ class Trainer:
                     CCE=self.config.CCE,
                     MVC=self.config.GEPC,
                     ECS=self.config.ECS,
-                )
+                ))
                 masked_positions = torch.ones_like(input_values, dtype=bool)  # Use all
                 loss = loss_mse = self.criterion(
                     output_dict["mlm_output"],
@@ -224,7 +231,7 @@ class Trainer:
                     self.data.vocab[self.data.pad_token]
                 )
                 with torch.cuda.amp.autocast(enabled=self.config.amp):
-                    output_dict = self.model(
+                    output_dict = self.get_output_dict(self.model(
                         input_gene_ids,
                         input_values,
                         input_pert,
@@ -233,7 +240,7 @@ class Trainer:
                         CCE=self.config.CCE,
                         MVC=self.config.GEPC,
                         ECS=self.config.ECS,
-                    )
+                    ))
                     masked_positions = torch.ones_like(input_values, dtype=bool)  # Use all
                     loss = self.criterion(
                         output_dict["mlm_output"],
@@ -324,7 +331,7 @@ class Trainer:
             self.data.vocab[self.data.pad_token]
         )
         with torch.cuda.amp.autocast(enabled=self.config.amp):
-            output_dict = self.best_model(
+            output_dict = self.get_output_dict(self.best_model(
                 input_gene_ids,
                 input_values,
                 input_pert,
@@ -333,7 +340,7 @@ class Trainer:
                 CCE=self.config.CCE,
                 MVC=self.config.GEPC,
                 ECS=self.config.ECS,
-            )
+            ))
             pred_values = output_dict["mlm_output"].float()
         #TODO: 
         #if not include_zero_gene:
