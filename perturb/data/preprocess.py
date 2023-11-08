@@ -7,7 +7,7 @@ import scanpy as sc
 import anndata as ad
 from scipy import sparse
 from typing import Optional
-from .utils import create_logger
+from ..utils import create_logger
 
 class Preprocessor:
     """

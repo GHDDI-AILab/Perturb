@@ -14,9 +14,9 @@ from scipy import sparse
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
+from .preprocess import Preprocessor
 from ..tokenizer import GeneVocab
-from ..utils import create_logger, data_downloader
-from ..utils.preprocess import Preprocessor
+from ..utils import create_logger, data_downloader, read_json, write_json
 
 sc.settings.verbosity = 1
 warnings.filterwarnings("ignore")
@@ -347,11 +347,11 @@ class PertData(PertBase):
     }
 
     def __init__(
-            self, dataset: str,
+            self,
+            dataset: str,
             workdir: Path = Path('data'),
             keep_ctrl: bool = True,
             seed: int = 1,
-            test_size: float = 0.1,
             vocab_file: Optional[Path] = None,
         ) -> None:
         self.logger = create_logger(name=self.__class__.__name__)
@@ -359,15 +359,15 @@ class PertData(PertBase):
         self.workdir = Path(workdir)
         if not self.workdir.exists():
             self.workdir.mkdir(parents=True)
-        self.keep_ctrl = keep_ctrl  # used for self.set_dataloader()
-        self.test_size = test_size  # used for self.set_dataloader()
+        self.keep_ctrl = keep_ctrl
 
-        np.random.seed(seed)
         self._load_adata()
         self._check_mode()
         self.logger.info(f'mode = {repr(self.mode)}')
         self._drop_NA_genes()
         self.set_vocab(vocab_file)
+        self.splitter = DataSplitter(self, seed)
+        self.logger.info(f'Got a data splitter: seed = {seed}')
 
     def _load_adata(self) -> None:
         """
@@ -468,45 +468,50 @@ class PertData(PertBase):
             self.logger.info('Calculated differentially expressed genes.')
             self.logger.info('Preprocessed adata.')
 
-    def _create_dataset(self) -> PertDataset:
+    def prepare_split(self, *args, **kwargs) -> None:
+        """
+        Prepare splits of train, val, and test perturbations.
+
+        Returns:
+            None
+        """
+        self.splitter.prepare_split(*args, **kwargs)
+        self.logger.info('Prepared splits.')
+
+    def _create_dataset(self, adata: ad.AnnData) -> PertDataset:
         if self.ctrl_adata is None:
             self.ctrl_adata = self.adata[
                 self.adata.obs[self.pert_col] == self.ctrl_str
-            ]
-
-        if self.keep_ctrl:
-            adata = self.adata
-        else:
-            adata = self.adata[
-                self.adata.obs[self.pert_col] != self.ctrl_str
             ]
 
         indices = np.random.randint(0, len(self.ctrl_adata), len(adata))
         return PertDataset(self.ctrl_adata[indices, ], adata, self.vocab)
 
     def set_dataloader(
-            self, batch_size: int, test_batch_size: Optional[int] = None
+            self,
+            batch_size: int,
+            test_batch_size: Optional[int] = None,
         ) -> None:
+        """
+        Set dataloaders of train, val, and test sets.
+
+        Returns:
+            None
+        """
         if test_batch_size is None:
             test_batch_size = batch_size
 
-        dataset = self._create_dataset()
-        train_x, test_x, train_y, test_y = train_test_split(
-            dataset.x, dataset.y, test_size=self.test_size, shuffle=True
-        )
-        train_x, valid_x, train_y, valid_y = train_test_split(
-            train_x, train_y, test_size=self.test_size, shuffle=True
-        )
+        split = self.splitter.split_data()
         train_loader = DataLoader(
-            PertDataset(train_x, train_y, self.vocab),
+            self._create_dataset(split['train']),
             batch_size=batch_size, shuffle=True, drop_last=True
         )
         val_loader = DataLoader(
-            PertDataset(valid_x, valid_y, self.vocab),
+            self._create_dataset(split['val']),
             batch_size=test_batch_size, shuffle=True
         )
         test_loader = DataLoader(
-            PertDataset(test_x, test_y, self.vocab),
+            self._create_dataset(split['test']),
             batch_size=test_batch_size, shuffle=False
         )
         self.dataloader = {
@@ -551,8 +556,10 @@ class PertData(PertBase):
         return PertDataset(x, fake_y, self.vocab)
 
     def get_dataloader_for_prediction(
-            self, test_batch_size: int, 
-            perturbation: str, pool_size: Optional[int] = None
+            self,
+            test_batch_size: int,
+            perturbation: str,
+            pool_size: Optional[int] = None,
         ) -> DataLoader:
         return DataLoader(
             self._create_dataset_for_prediction(perturbation, pool_size),
@@ -581,7 +588,9 @@ class PertData(PertBase):
                             self.crispr_flag, self.ctrl_flag)
 
     def tokenize_and_pad_batch(
-            self, data: torch.Tensor, gene_ids: torch.Tensor,
+            self,
+            data: torch.Tensor,
+            gene_ids: torch.Tensor,
             max_len: int,
             append_cls: bool = True,
             include_zero_gene: bool = True,
@@ -666,7 +675,8 @@ class PertData(PertBase):
         }
 
     def get_tokenized_batch(
-            self, batch_data: dict,
+            self,
+            batch_data: dict,
             max_len: int = 0,
             append_cls: bool = True,
             include_zero_gene: str|bool = True,
@@ -760,4 +770,119 @@ class PertData(PertBase):
         else:
             de = {}
         return pert|x|y|de
+
+
+class DataSplitter:
+
+    split_types = ['unseen', 'shuffle']
+
+    def __init__(self, pert_data: PertData, seed: Optional[int] = None) -> None:
+        self.seed = seed
+        self.data = pert_data
+        self.save_dir = Path(pert_data.dataset_path)
+
+    def set_save_dir(self, save_dir: Path) -> None:
+        self.save_dir = Path(save_dir)
+
+    def get_save_file(self) -> Path:
+        return self.save_dir / 'train_test_split.json'
+
+    def prepare_split(
+            self,
+            split_type: str = 'unseen',
+            test_perts: Optional[list] = None,
+            val_perts: Optional[list] = None,
+            test_size: float = 0.1,
+            val_size: float = 0.1,
+        ) -> None:
+        """
+        Prepare splits of train, val, and test perturbations.
+
+        Returns:
+            None
+        """
+        if split_type not in self.split_types:
+            raise ValueError(f"Invalid split_type: {repr(split_type)}!")
+
+        if split_type == 'unseen':
+            perts = self.data.adata.obs[self.data.pert_col].unique()
+            perts_no_ctrl = np.setdiff1d(perts, self.data.ctrl_str)
+            test_not_given = (
+                test_perts is None
+                or not len(np.intersect1d(test_perts, perts))
+            )
+            val_not_given = (
+                val_perts is None
+                or not len(np.intersect1d(val_perts, perts))
+            )
+            np.random.seed(self.seed)
+            if test_not_given and val_not_given:
+                num_test = round(test_size * len(perts_no_ctrl))
+                num_val = round(val_size * len(perts_no_ctrl))
+                perm = np.random.permutation(perts_no_ctrl)
+                test_perts = perm[0:num_test]
+                val_perts = perm[num_test:num_test+num_val]
+            elif test_not_given:
+                num_test = round(test_size * len(perts_no_ctrl))
+                test_perts = np.random.permutation(
+                    np.setdiff1d(perts_no_ctrl, val_perts)
+                )[0:num_test]
+            elif val_not_given:
+                num_val = round(val_size * len(perts_no_ctrl))
+                val_perts = np.random.permutation(
+                    np.setdiff1d(perts_no_ctrl, test_perts)
+                )[0:num_val]
+
+            train_perts = np.setdiff1d(perts, np.union1d(test_perts, val_perts))
+            write_json(
+                {
+                    'type': split_type,
+                    'train': train_perts,
+                    'val': val_perts,
+                    'test': test_perts,
+                },
+                self.get_save_file()
+            )
+        elif split_type == 'shuffle':
+            write_json(
+                {
+                    'type': split_type,
+                    'val_size': val_size,
+                    'test_size': test_size,
+                },
+                self.get_save_file()
+            )
+
+    def split_data(self) -> dict:
+        try:
+            split = read_json(self.get_save_file())
+        except OSError:
+            split = None
+
+        adata = self.data.adata
+        if split is None:
+            train_data, test_data = train_test_split(
+                adata, test_size=0.1, shuffle=True,
+            )
+            train_data, val_data = train_test_split(
+                train_data, test_size=0.1, shuffle=True,
+            )
+        elif split['type'] == 'shuffle':
+            train_data, test_data = train_test_split(
+                adata, test_size=split['test_size'], shuffle=True,
+            )
+            train_data, val_data = train_test_split(
+                train_data, test_size=split['val_size'], shuffle=True,
+            )
+        elif split['type'] == 'unseen':
+            train_perts, val_perts, test_perts = (
+                split['train'], split['val'], split['test']
+            )
+            train_data, val_data, test_data = (
+                adata[adata.obs[self.data.pert_col].isin(train_perts)],
+                adata[adata.obs[self.data.pert_col].isin(val_perts)],
+                adata[adata.obs[self.data.pert_col].isin(test_perts)],
+            )
+                    
+        return {'train': train_data, 'val': val_data, 'test': test_data}
 

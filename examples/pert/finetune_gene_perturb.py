@@ -52,10 +52,13 @@ if __name__ == '__main__':
         dataset=conf.h.p.dataset,
         keep_ctrl=False,
         seed=conf.h.p.seed,
-        test_size=conf.h.p.test_size,
         vocab_file=vocab_file,
     )
     pert_data.set_DE_genes()
+    pert_data.prepare_split(
+        split_type=conf.h.p.split,
+        test_size=conf.h.p.test_size,
+    )
     pert_data.set_dataloader(
         batch_size=conf.h.p.batch_size,
         test_batch_size=conf.h.p.eval_batch_size,

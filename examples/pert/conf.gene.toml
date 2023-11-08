@@ -2,7 +2,7 @@
 
 project = "Perturb"
 dataset = "adamson"
-#split = "simulation"
+split = "unseen"
 seed = 42
 
 # settings for data prcocessing
@@ -15,7 +15,7 @@ pad_value  = -2  # 0 or -2
 pert_pad_id = 2
 #n_bins = 51
 include_zero_gene = "all"  # include zero expr genes in training input: "all", "batch-wise", "row-wise", or False
-n_hvg = 0  # number of highly variable genes
+#n_hvg = 0  # number of highly variable genes
 max_seq_len = 1500  # n_hvg+1 if n_hvg > 0
 #per_seq_batch_sample = true
 
