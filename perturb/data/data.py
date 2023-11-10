@@ -355,18 +355,20 @@ class PertData(PertBase):
             vocab_file: Optional[Path] = None,
         ) -> None:
         self.logger = create_logger(name=self.__class__.__name__)
+        self.logger.info('Init...')
         self.dataset = str(dataset)
         self.workdir = Path(workdir)
         if not self.workdir.exists():
             self.workdir.mkdir(parents=True)
         self.keep_ctrl = keep_ctrl
+        self.seed = seed
 
         self._load_adata()
         self._check_mode()
         self.logger.info(f'mode = {repr(self.mode)}')
         self._drop_NA_genes()
         self.set_vocab(vocab_file)
-        self.splitter = DataSplitter(self, seed)
+        self.splitter = DataSplitter(self)
         self.logger.info(f'Got a data splitter: seed = {seed}')
 
     def _load_adata(self) -> None:
@@ -776,13 +778,26 @@ class DataSplitter:
 
     split_types = ['unseen', 'shuffle']
 
-    def __init__(self, pert_data: PertData, seed: Optional[int] = None) -> None:
-        self.seed = seed
-        self.data = pert_data
-        self.save_dir = Path(pert_data.dataset_path)
+    def __init__(
+            self,
+            pert_data: PertData,
+            save_dir: Optional[Path] = None,
+            seed: Optional[int] = None,
+        ) -> None:
+        self.adata = pert_data.adata
+        self.pert_col = pert_data.pert_col
+        self.ctrl_str = pert_data.ctrl_str
+        self.keep_ctrl = pert_data.keep_ctrl
 
-    def set_save_dir(self, save_dir: Path) -> None:
-        self.save_dir = Path(save_dir)
+        if save_dir is None:
+            self.save_dir = pert_data.dataset_path
+        else:
+            self.save_dir = Path(save_dir)
+
+        if seed is None:
+            self.seed = pert_data.seed
+        else:
+            self.seed = int(seed)
 
     def get_save_file(self) -> Path:
         return self.save_dir / 'train_test_split.json'
@@ -805,15 +820,18 @@ class DataSplitter:
             raise ValueError(f"Invalid split_type: {repr(split_type)}!")
 
         if split_type == 'unseen':
-            perts = self.data.adata.obs[self.data.pert_col].unique()
-            perts_no_ctrl = np.setdiff1d(perts, self.data.ctrl_str)
+            perts = self.adata.obs[self.pert_col].unique()
+            if not self.keep_ctrl:
+                perts = np.setdiff1d(perts, self.ctrl_str)
+
+            perts_no_ctrl = np.setdiff1d(perts, self.ctrl_str)
             test_not_given = (
                 test_perts is None
-                or not len(np.intersect1d(test_perts, perts))
+                or len(np.intersect1d(test_perts, perts)) <= 0
             )
             val_not_given = (
                 val_perts is None
-                or not len(np.intersect1d(val_perts, perts))
+                or len(np.intersect1d(val_perts, perts)) <= 0
             )
             np.random.seed(self.seed)
             if test_not_given and val_not_given:
@@ -847,6 +865,7 @@ class DataSplitter:
             write_json(
                 {
                     'type': split_type,
+                    'keep_ctrl': self.keep_ctrl,
                     'val_size': val_size,
                     'test_size': test_size,
                 },
@@ -859,8 +878,10 @@ class DataSplitter:
         except OSError:
             split = None
 
-        adata = self.data.adata
         if split is None:
+            adata = self.adata if self.keep_ctrl else self.adata[
+                self.adata.obs[self.pert_col] != self.ctrl_str
+            ]
             train_data, test_data = train_test_split(
                 adata, test_size=0.1, shuffle=True,
             )
@@ -868,6 +889,9 @@ class DataSplitter:
                 train_data, test_size=0.1, shuffle=True,
             )
         elif split['type'] == 'shuffle':
+            adata = self.adata if split['keep_ctrl'] else self.adata[
+                self.adata.obs[self.pert_col] != self.ctrl_str
+            ]
             train_data, test_data = train_test_split(
                 adata, test_size=split['test_size'], shuffle=True,
             )
@@ -878,11 +902,12 @@ class DataSplitter:
             train_perts, val_perts, test_perts = (
                 split['train'], split['val'], split['test']
             )
+            # Are shuffles needed for train and val sets here?
             train_data, val_data, test_data = (
-                adata[adata.obs[self.data.pert_col].isin(train_perts)],
-                adata[adata.obs[self.data.pert_col].isin(val_perts)],
-                adata[adata.obs[self.data.pert_col].isin(test_perts)],
+                self.adata[self.adata.obs[self.pert_col].isin(train_perts)],
+                self.adata[self.adata.obs[self.pert_col].isin(val_perts)],
+                self.adata[self.adata.obs[self.pert_col].isin(test_perts)],
             )
-                    
+            
         return {'train': train_data, 'val': val_data, 'test': test_data}
 

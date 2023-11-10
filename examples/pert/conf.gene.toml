@@ -2,6 +2,7 @@
 
 project = "Perturb"
 dataset = "adamson"
+keep_ctrl = true
 split = "unseen"
 seed = 42
 
@@ -15,7 +16,6 @@ pad_value  = -2  # 0 or -2
 pert_pad_id = 2
 #n_bins = 51
 include_zero_gene = "all"  # include zero expr genes in training input: "all", "batch-wise", "row-wise", or False
-#n_hvg = 0  # number of highly variable genes
 max_seq_len = 1500  # n_hvg+1 if n_hvg > 0
 #per_seq_batch_sample = true
 
@@ -73,9 +73,8 @@ normalize_total = 1e4           # Step 3: whether to normalize the raw data and 
 result_normed_key = "X_normed"  # the key in adata.layers to store the normalized data
 log1p = true                    # Step 4: whether to log1p the normalized data  # log1p = data_is_raw
 result_log1p_key = "X_log1p"    # the key in adata.layers to store the log transformed data
-subset_hvg = false              # Step 5: whether to subset the raw data to highly variable genes  # subset_hvg = n_hvg
+subset_hvg = false              # Step 5: whether to subset the raw data to, and the number of, highly variable genes
 hvg_flavor = "seurat_v3"        # hvg_flavor = "seurat_v3" if data_is_raw else "cell_ranger"
 binning = false                 # Step 6: whether to bin the raw data and to what number of bins
 result_binned_key = "X_binned"  # the key in adata.layers to store the binned data
-
 

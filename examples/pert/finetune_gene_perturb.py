@@ -50,7 +50,7 @@ if __name__ == '__main__':
     ]
     pert_data = PertData(
         dataset=conf.h.p.dataset,
-        keep_ctrl=False,
+        keep_ctrl=conf.h.p.keep_ctrl,
         seed=conf.h.p.seed,
         vocab_file=vocab_file,
     )
