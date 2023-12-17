@@ -51,12 +51,21 @@ class Trainer:
 
     def prepare_data(self, data) -> None:
         self.data = data
-        self.train_loader = data.dataloader["train_loader"]
-        self.val_loader = data.dataloader.get("val_loader")
-        self.test_loader = data.dataloader.get("test_loader")
+        self.data.set_DE_genes()
+        self.data.prepare_split(
+            split_type=self.config.split,
+            test_size=self.config.test_size,
+        )
+        self.data.set_dataloader(
+            batch_size=self.config.batch_size,
+            test_batch_size=self.config.eval_batch_size,
+        )
+        self.train_loader = self.data.dataloader["train_loader"]
         self.num_train_batches = len(self.train_loader)
+        self.val_loader = self.data.dataloader.get("val_loader")
         self.num_val_batches = (0 if self.val_loader is None
                                   else len(self.val_loader))
+        self.test_loader = self.data.dataloader.get("test_loader")
         self.num_test_batches = (0 if self.test_loader is None
                                    else len(self.test_loader))
 

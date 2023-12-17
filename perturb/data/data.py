@@ -23,9 +23,10 @@ warnings.filterwarnings("ignore")
 
 class PertBase:
     """A base class for perturbation data classes."""
-    num_de_genes: int = 20
-    key_de_genes: str = "rank_genes_groups_cov_all"
+    covariate: str = "cell_type"
     condition_name: str = "condition_name"
+    key_de_genes: str = "rank_genes_groups_cov_all"
+    num_de_genes: int = 20
 
     def _check_mode(self) -> None:
         """
@@ -42,8 +43,8 @@ class PertBase:
         if not hasattr(self, "adata") or self.adata is None:
             raise AttributeError("adata not loaded!")
 
-        if "cell_type" not in self.adata.obs.columns:
-            raise ValueError("Cannot find 'cell_type' in adata.obs!")
+        if self.covariate not in self.adata.obs.columns:
+            raise ValueError(f"Cannot find '{self.covariate}' in adata.obs!")
 
         if set(["canonical_smiles",]).issubset(self.adata.obs.columns):
             self.mode = "compound"
@@ -198,7 +199,6 @@ class PertBase:
                 raise ValueError("Expecting logarithmized data.")
 
         groupby = self.condition_name
-        covariate = 'cell_type'
         control_group = self.ctrl_group
 
         if self.mode == "gene":
@@ -210,24 +210,24 @@ class PertBase:
             )
             self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
-                    x[covariate], x[self.pert_col], x['dose_val']
+                    x[self.covariate], x[self.pert_col], x['dose_val']
                 ]), axis = 1
             )
         elif self.mode == "compound":
             self.adata.obs[groupby] = self.adata.obs.apply(
                 lambda x: '_'.join([
-                    x[covariate], x[self.pert_col]
+                    x[self.covariate], x[self.pert_col]
                 ]), axis = 1
             )
 
         self.adata.obs = self.adata.obs.astype('category')
-        cov_categories = self.adata.obs[covariate].unique()
+        cov_categories = self.adata.obs[self.covariate].unique()
         gene_dict = {}
         for cov_cat in cov_categories:
             #name of the control group in the groupby obs column
             control_group_cov = '_'.join([cov_cat, control_group])
             #subset adata to cells belonging to a covariate category
-            adata_cov = self.adata[self.adata.obs[covariate] == cov_cat]
+            adata_cov = self.adata[self.adata.obs[self.covariate] == cov_cat]
             #compute DEGs
             sc.tl.rank_genes_groups(
                 adata_cov,
@@ -545,13 +545,13 @@ class PertData(PertBase):
             )
             fake_y.obs[self.condition_name] = fake_y.obs.apply(
                 lambda x: '_'.join([
-                    x['cell_type'], x[self.pert_col], x['dose_val']
+                    x[self.covariate], x[self.pert_col], x['dose_val']
                 ]), axis = 1
             )
         elif self.mode == "compound":
             fake_y.obs[self.condition_name] = fake_y.obs.apply(
                 lambda x: '_'.join([
-                    x['cell_type'], x[self.pert_col]
+                    x[self.covariate], x[self.pert_col]
                 ]), axis = 1
             )
 

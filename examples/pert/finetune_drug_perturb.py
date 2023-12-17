@@ -61,14 +61,6 @@ if __name__ == '__main__':
         subset_hvg=conf.p.p.subset_hvg,
         binning=conf.p.p.binning,
     )
-    pert_data.prepare_split(
-        split_type=conf.h.p.split,
-        test_size=conf.h.p.test_size,
-    )
-    pert_data.set_dataloader(
-        batch_size=conf.h.p.batch_size,
-        test_batch_size=conf.h.p.eval_batch_size,
-    )
 
     trainer = Trainer(config=conf.h.p)
     model = Transformer4Cmpd(
