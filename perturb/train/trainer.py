@@ -59,6 +59,9 @@ class Trainer:
         self.data.set_dataloader(
             batch_size=self.config.batch_size,
             test_batch_size=self.config.eval_batch_size,
+            max_len=self.config.max_seq_len,
+            test_max_len=0,
+            append_cls=self.config.GEPC,
         )
         self.train_loader = self.data.dataloader["train_loader"]
         self.num_train_batches = len(self.train_loader)
@@ -109,14 +112,7 @@ class Trainer:
         total_error = 0.0
         start_time = time.time()
 
-        for idx, batch_data in enumerate(self.train_loader):
-            tokenized_batch = self.prepare_batch(
-                batch_data, max_len=self.config.max_seq_len,
-                append_cls=self.config.GEPC,
-            )
-            if not tokenized_batch:
-                continue
-
+        for idx, tokenized_batch in enumerate(self.train_loader):
             input_gene_ids = tokenized_batch['genes'].to(device)
             input_values = tokenized_batch['values'].to(device)
             target_values = tokenized_batch['target_values'].to(device)
@@ -220,14 +216,7 @@ class Trainer:
         total_error = 0.0
         total_num = 0
         with torch.no_grad():
-            for batch_data in self.val_loader:
-                tokenized_batch = self.prepare_batch(
-                    batch_data, max_len=0,
-                    append_cls=self.config.GEPC,
-                )
-                if not tokenized_batch:
-                    continue
-
+            for tokenized_batch in self.val_loader:
                 input_gene_ids = tokenized_batch['genes'].to(device)
                 input_values = tokenized_batch['values'].to(device)
                 target_values = tokenized_batch['target_values'].to(device)
@@ -315,14 +304,19 @@ class Trainer:
         """
         self.model.eval()
         device = self.device
-        tokenized_batch = self.prepare_batch(
-            batch_data,
-            max_len=0,
-            append_cls=self.config.GEPC,
-            include_zero_gene=include_zero_gene,
-        )
-        if not tokenized_batch:
-            return {}
+        if set(['genes', 'values']).issubset(batch_data):
+            tokenized_batch = batch_data
+        elif set(['x', 'y']).issubset(batch_data):
+            tokenized_batch = self.prepare_batch(
+                batch_data,
+                max_len=0,
+                append_cls=self.config.GEPC,
+                include_zero_gene=include_zero_gene,
+            )
+            if not tokenized_batch:
+                return {}
+        else:
+            raise ValueError(batch_data.keys())
 
         input_gene_ids = tokenized_batch['genes'].to(device)
         input_values = tokenized_batch['values'].to(device)
@@ -392,7 +386,7 @@ class Trainer:
                 if not d or d["de_idx"] is None:
                     continue
 
-                pert_cat.extend(batch_data['y']['obs'][self.data.pert_col])
+                pert_cat.extend(batch_data['pert'])
                 de.extend(d["de_idx"])
 
                 delta_p = d["pred"] - d["values"]

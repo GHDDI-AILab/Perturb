@@ -328,6 +328,17 @@ class PertDataset(Dataset, PertBase):
         return self.adata.shape[0]
 
 
+class SeqDataset(Dataset):
+    def __init__(self, data: dict[str, torch.Tensor]):
+        self.data = data
+
+    def __len__(self):
+        return self.data["values"].shape[0]
+
+    def __getitem__(self, idx: int):
+        return {k: self.data[k][idx] for k in self.data}
+
+
 class PertData(PertBase):
     
     ctrl_flag: int = 0
@@ -388,16 +399,21 @@ class PertData(PertBase):
                 url=self.urls[self.dataset.lower()],
                 save_path=data_path
             )
+            data_file = data_path / 'perturb_processed.h5ad'
         elif Path(self.dataset).is_dir():
             data_path = Path(self.dataset)
+            data_file = data_path / 'perturb_processed.h5ad'
+        elif Path(self.dataset).is_file():
+            data_file = Path(self.dataset)
+            data_path = data_file.parent
         else:
             raise ValueError(
                 "The dataset is either Norman/Adamson/Dixit "
                 "or a directory with a perturb_processed.h5ad file."
             )
-        self.adata = ad.read_h5ad(data_path / 'perturb_processed.h5ad')
+        self.adata = ad.read_h5ad(data_file)
         self.ctrl_adata = None
-        self.dataset_name = data_path.name
+        self.dataset_name = data_path.absolute().name
         self.dataset_path = data_path
         self.logger.info('Loaded adata.')
 
@@ -480,19 +496,64 @@ class PertData(PertBase):
         self.splitter.prepare_split(*args, **kwargs)
         self.logger.info('Prepared splits.')
 
-    def _create_dataset(self, adata: ad.AnnData) -> PertDataset:
+    def transform_data(self, x: ad.AnnData, y: ad.AnnData, vocab: GeneVocab) -> dict:
+        """
+        Transforming the control and perturbed AnnData into a new format,
+        as the input for tokenization.
+
+        Returns:
+            dict
+        """
+        assert x.shape == y.shape, "x and y do not have the same shape!"
+        de_dict: dict | None = self.get_DE_genes()
+        id2gene: dict = y.var.to_dict()[self.gene_col]
+
+        if de_dict is None:
+            de_idx = de_genes = [[-1]] * y.n_obs
+        else:
+            de_idx = []
+            de_genes = []
+            for i in range(y.n_obs):
+                if y.obs[self.pert_col][i] == self.ctrl_str:
+                    de_idx.append([-1] * self.num_de_genes)
+                    de_genes.append([-1] * self.num_de_genes)
+                else:
+                    key = y.obs[self.condition_name][i]
+                    de_ = de_dict[key][:self.num_de_genes]
+                    de_idx.append(np.where(y.var.index.isin(de_))[0])
+                    de_genes.append(vocab([id2gene[k] for k in de_]))
+
+        return {
+            'x': {'X': torch.tensor(x.X.A), 'obs': x.obs.to_dict('list')},
+            'y': {'X': torch.tensor(y.X.A), 'obs': y.obs.to_dict('list')},
+            'de_idx': torch.tensor(de_idx, dtype=int),
+            'de_genes': torch.tensor(de_genes, dtype=int),
+            'gene_ids': torch.tensor(self.get_gene_ids()).expand([y.n_obs, -1]),
+        }
+
+    def _create_dataset(
+            self, adata: ad.AnnData, max_len: int = 0, append_cls: bool = True,
+        ) -> SeqDataset:
         if self.ctrl_adata is None:
             self.ctrl_adata = self.adata[
                 self.adata.obs[self.pert_col] == self.ctrl_str
             ]
 
         indices = np.random.randint(0, len(self.ctrl_adata), len(adata))
-        return PertDataset(self.ctrl_adata[indices, ], adata, self.vocab)
+        return SeqDataset(
+            self.get_tokenized_batch(
+                self.transform_data(self.ctrl_adata[indices], adata, self.vocab),
+                max_len=max_len, append_cls=append_cls,
+            )
+        )
 
     def set_dataloader(
             self,
             batch_size: int,
             test_batch_size: Optional[int] = None,
+            max_len: int = 0,
+            test_max_len: int = 0,
+            append_cls: bool = True,
         ) -> None:
         """
         Set dataloaders of train, val, and test sets.
@@ -505,15 +566,15 @@ class PertData(PertBase):
 
         split = self.splitter.split_data()
         train_loader = DataLoader(
-            self._create_dataset(split['train']),
+            self._create_dataset(split['train'], max_len, append_cls),
             batch_size=batch_size, shuffle=True, drop_last=True
         )
         val_loader = DataLoader(
-            self._create_dataset(split['val']),
+            self._create_dataset(split['val'], test_max_len, append_cls),
             batch_size=test_batch_size, shuffle=True
         )
         test_loader = DataLoader(
-            self._create_dataset(split['test']),
+            self._create_dataset(split['test'], test_max_len, append_cls),
             batch_size=test_batch_size, shuffle=False
         )
         self.dataloader = {
@@ -699,11 +760,11 @@ class PertData(PertBase):
         Returns:
             dict[str, torch.Tensor]:
                 for gene perturbations, the keys will be:
-                    ["genes", "pert_flags", "de_idx", "values", "target_values"]
-                    or ["genes", "pert_flags", "values", "target_values"]
+                    ["genes", "pert_flags", "pert", "values", "target_values", "de_idx"]
+                    or ["genes", "pert_flags", "pert", "values", "target_values"]
                 for compound perturbations, the keys will be:
-                    ["genes", "pert",       "de_idx", "values", "target_values"]
-                    or ["genes", "pert",       "values", "target_values"]
+                    ["genes", "pert", "values", "target_values", "de_idx"]
+                    or ["genes", "pert", "values", "target_values"]
         """
         #TODO: allow include_zero_gene = False
         batch_size: int = batch_data['y']['X'].shape[0]
@@ -722,11 +783,14 @@ class PertData(PertBase):
             input_gene_idx = torch.arange(n_genes)
 
         if self.mode == "gene":
+            pert_cond_list = []
             pert_list = []
             row_idx = []
             for idx, cond in enumerate(batch_data['y']['obs'][self.pert_col]):
                 flags = self.get_pert_flags(cond)
-                if flags is not None:  # shall not be 'if flags' as an array
+                if flags is not None:
+                # Do not write as "if flags:", given that it's an array
+                    pert_cond_list.append(cond)
                     pert_list.append(flags)
                     row_idx.append(idx)
 
@@ -744,6 +808,7 @@ class PertData(PertBase):
                 include_zero_gene=include_zero_gene,
             )
             pert['pert_flags'] = pert.pop('values', None)
+            pert['pert'] = pert_cond_list
 
         elif self.mode == "compound":
             pert = {'pert': batch_data['y']['obs'][self.pert_col]}
