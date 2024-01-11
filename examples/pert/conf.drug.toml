@@ -5,6 +5,7 @@ dataset = "data/K562_compound188"
 keep_ctrl = false
 split = "unseen"
 seed = 42
+save_model = false
 
 # settings for data prcocessing
 #mask_ratio = 0.4

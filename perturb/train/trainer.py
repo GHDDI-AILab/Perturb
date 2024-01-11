@@ -1,6 +1,7 @@
 __all__ = ['Trainer']
 
 import gc
+import copy
 import time
 import warnings
 from typing import Optional
@@ -263,10 +264,11 @@ class Trainer:
         return total_loss / total_num, total_error / total_num
 
     def fit(self) -> None:
-        self.best_model = self.model
+        self.best_model = copy.deepcopy(self.model)
         self.best_model_epoch = 0
         best_val_loss = float("inf")
         define_wandb_metrics()
+        self.eval_testdata(0)
         for epoch in range(1, self.epochs + 1):
             epoch_start_time = time.time()
             if self.config.do_train: self.fit_epoch(epoch)
@@ -282,11 +284,13 @@ class Trainer:
         
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.best_model = self.model
+                self.best_model = None
                 self.best_model_epoch = epoch
+                self.best_model = copy.deepcopy(self.model)
                 self.logger.info(f"Best model with score {best_val_loss:5.4f}")
 
             self.scheduler.step()
+            self.eval_testdata(epoch)
 
     def predict_batch(
             self, batch_data, include_zero_gene: str|bool = True,
@@ -478,7 +482,7 @@ class Trainer:
         return {'allgenes': corr1, 'delta_allgenes': corr2}
 
     def compute_metrics(
-            self, results: dict[str, dict[str, np.ndarray]]
+            self, results: dict[str, dict[str, np.ndarray]], ndigits: int = 6
         ) -> tuple[dict]:
         """
         Compute the MSE and correlations between the truth
@@ -487,6 +491,8 @@ class Trainer:
         Args:
             results (dict[str, dict[str, numpy.ndarray]]):
                 the reshaped results
+            ndigits (int, default: 6):
+                Round numbers to a given precision in decimal digits.
 
         Returns:
             tuple[dict]:
@@ -534,14 +540,14 @@ class Trainer:
             key: 0 for pert in metrics_pert for key in metrics_pert[pert]
         })
         metrics_overall: dict[str, float] = {
-            key: np.mean([
+            key: round(np.mean([
                 metrics_pert[pert][key] for pert in metrics_pert
-            ])
+            ]), ndigits)
             for key in keys
         }
         return metrics_overall, metrics_pert
 
-    def eval_testdata(self) -> None:
+    def eval_testdata(self, epoch) -> None:
         preds_and_truths = self.eval_perturb(self.test_loader)
         results = self.reshape_results(preds_and_truths)
         coef = self.corr_heatmaps(results)
@@ -549,15 +555,18 @@ class Trainer:
         # NOTE: mse and pearson corr here are computed for the 
         # mean pred expressions vs. the truth mean across all genes.
         # Further, one can compute the distance of two distributions.
-        self.logger.info(test_metrics)
+        log_metrics = {"test/" + k: v for k, v in test_metrics.items()}
+        self.logger.info(log_metrics)
+        log_metrics["epoch"] = epoch
+        wandb.log(log_metrics)
         write_pickle(preds_and_truths,
                      self.save_dir / 'preds_and_truths.pkl.xz')
         write_pickle(coef,
-                     self.save_dir / 'pert_corr_matrix.pkl.xz')
+                     self.save_dir / f'pert_corr_matrix.epoch{epoch}.pkl.xz')
         write_json(test_metrics,
-                   self.save_dir / 'test_metrics.json.xz')
+                   self.save_dir / f'test_metrics.epoch{epoch}.json.xz')
         write_json(test_pert_metrics,
-                   self.save_dir / 'test_pert_metrics.json.xz')
+                   self.save_dir / f'test_pert_metrics.epoch{epoch}.json.xz')
         
     def predict(
             self, pert_list: list[str], pool_size: Optional[int] = None
@@ -656,11 +665,12 @@ class Trainer:
             plt.show()
 
     def save_checkpoint(self) -> None:
-        best_model_file = self.save_dir / "best_model.pt"
-        torch.save(self.best_model.state_dict(), best_model_file)
-        artifact = wandb.Artifact(f"best_model", type="model")
-        artifact.add_file(best_model_file)
-        self.run.log_artifact(artifact)
+        if self.config.save_model:
+            best_model_file = self.save_dir / "best_model.pt"
+            torch.save(self.best_model.state_dict(), best_model_file)
+            artifact = wandb.Artifact(f"best_model", type="model")
+            artifact.add_file(best_model_file)
+            self.run.log_artifact(artifact)
 
     def finish(self) -> None:
         self.run.finish()

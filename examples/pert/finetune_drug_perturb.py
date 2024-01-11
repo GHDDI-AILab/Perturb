@@ -120,7 +120,6 @@ if __name__ == '__main__':
     trainer.prepare_data(pert_data)
     trainer.prepare_model(model)
     trainer.fit()
-    trainer.eval_testdata()
     for pert in perts_to_plot:
         try:
             trainer.plot_perturb(pert, pool_size=300, save_file=f"{pert}.png")
