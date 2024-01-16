@@ -6,6 +6,7 @@ keep_ctrl = true
 split = "unseen"
 seed = 42
 save_model = false
+debug_mode = false
 
 # settings for data prcocessing
 #mask_ratio = 0.4

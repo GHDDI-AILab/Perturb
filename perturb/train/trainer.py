@@ -122,9 +122,12 @@ class Trainer:
             elif self.data.mode == "compound":
                 input_pert = tokenized_batch['pert']
 
-            src_key_padding_mask = input_gene_ids.eq(
-                self.data.vocab[self.data.pad_token]
-            )
+                # src_key_padding_mask = input_gene_ids.eq(
+                #     self.data.vocab[self.data.pad_token]
+                # )
+                src_key_padding_mask = torch.zeros_like(
+                    input_gene_ids, dtype=torch.bool, device=self.device
+                )
             with torch.cuda.amp.autocast(enabled=self.config.amp):
                 output_dict = self.get_output_dict(self.model(
                     input_gene_ids,
@@ -226,8 +229,11 @@ class Trainer:
                 elif self.data.mode == "compound":
                     input_pert = tokenized_batch['pert']
 
-                src_key_padding_mask = input_gene_ids.eq(
-                    self.data.vocab[self.data.pad_token]
+                # src_key_padding_mask = input_gene_ids.eq(
+                #     self.data.vocab[self.data.pad_token]
+                # )
+                src_key_padding_mask = torch.zeros_like(
+                    input_gene_ids, dtype=torch.bool, device=self.device
                 )
                 with torch.cuda.amp.autocast(enabled=self.config.amp):
                     output_dict = self.get_output_dict(self.model(
@@ -264,7 +270,7 @@ class Trainer:
         return total_loss / total_num, total_error / total_num
 
     def fit(self) -> None:
-        self.best_model = copy.deepcopy(self.model)
+        self.best_model = self.model
         self.best_model_epoch = 0
         best_val_loss = float("inf")
         define_wandb_metrics()
@@ -284,12 +290,21 @@ class Trainer:
         
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.best_model = None
                 self.best_model_epoch = epoch
-                self.best_model = copy.deepcopy(self.model)
                 self.logger.info(f"Best model with score {best_val_loss:5.4f}")
+                if not self.config.debug_mode:
+                    self.best_model = None
+                    self.best_model = copy.deepcopy(self.model)
 
             self.scheduler.step()
+            wandb.log({
+                "valid/best_model_epoch": self.best_model_epoch,
+                "epoch": epoch,
+            })
+            if self.config.debug_mode:
+                self.eval_testdata(epoch)
+
+        if not self.config.debug_mode:
             self.eval_testdata(epoch)
 
     def predict_batch(
@@ -334,8 +349,12 @@ class Trainer:
         #TODO:
         #if not include_zero_gene:
         #    ...
-        src_key_padding_mask = input_gene_ids.eq(
-            self.data.vocab[self.data.pad_token]
+
+        # src_key_padding_mask = input_gene_ids.eq(
+        #     self.data.vocab[self.data.pad_token]
+        # )
+        src_key_padding_mask = torch.zeros_like(
+            input_gene_ids, dtype=torch.bool, device=self.device
         )
         with torch.cuda.amp.autocast(enabled=self.config.amp):
             output_dict = self.get_output_dict(self.best_model(
