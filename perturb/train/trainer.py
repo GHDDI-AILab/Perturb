@@ -122,12 +122,12 @@ class Trainer:
             elif self.data.mode == "compound":
                 input_pert = tokenized_batch['pert']
 
-                # src_key_padding_mask = input_gene_ids.eq(
-                #     self.data.vocab[self.data.pad_token]
-                # )
-                src_key_padding_mask = torch.zeros_like(
-                    input_gene_ids, dtype=torch.bool, device=self.device
-                )
+            # src_key_padding_mask = input_gene_ids.eq(
+            #     self.data.vocab[self.data.pad_token]
+            # )
+            src_key_padding_mask = torch.zeros_like(
+                input_gene_ids, dtype=torch.bool, device=self.device
+            )
             with torch.cuda.amp.autocast(enabled=self.config.amp):
                 output_dict = self.get_output_dict(self.model(
                     input_gene_ids,
