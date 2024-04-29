@@ -16,22 +16,24 @@ class TestEvaluation:
         self,
         workdir: str|Path,
         savedir: str|Path = '.',
-        mode: str = 'drug',
+        mode: str = 'gene',
         by: str|list = ['cell_type', 'condition'],
         sample_n: int = 200,
+        sum_method: str = 'median',
     ) -> None:
         self.path = Path(workdir)
         self.save = Path(savedir)
+        self.save.mkdir(parents=True, exist_ok=True)
         self.mode = mode
         self.by = by
         self.sample_n = sample_n
+        self.sum_method = sum_method
         self.have_random_sample = False
 
     def load(self) -> None:
         self.ctrl = sc.read(self.path / 'h5ad/ctrl.h5ad')
         self.pert = sc.read(self.path / 'h5ad/testtruth.h5ad')
         self.pred = sc.read(self.path / 'h5ad/scGPTpred.h5ad')
-        # self.pred.obs.reset_index(drop=True, inplace=True)
         self.ctrl.var.set_index('gene_name', drop=False, inplace=True)
         self.pert.var.set_index('gene_name', drop=False, inplace=True)
         self.pred.var.set_index('gene_name', drop=False, inplace=True)
@@ -68,21 +70,24 @@ class TestEvaluation:
         by: str|list,
         value_col: str = 'expr',
         var_col: str = 'gene',
+        funcname: str = 'median',
     ) -> pd.DataFrame:
         def create_one_df(
             key: str|tuple,
             idx: pd.Index
         ) -> pd.DataFrame:
+            G = pd.DataFrame({
+                var_col: adata.var.gene_name,
+                value_col: getattr(np, funcname)(adata[idx].X, axis=0)
+            })
             if isinstance(by, str):
-                A = pd.DataFrame([{by: key}])
+                C = pd.DataFrame([{by: key}])
             elif isinstance(by, list) and len(by) == 1:
-                A = pd.DataFrame([{by[0]: key}])
+                C = pd.DataFrame([{by[0]: key}])
             else:
-                A = pd.DataFrame([dict(zip(by, key))])
-            B = pd.DataFrame({var_col: adata.var.gene_name,
-                              value_col: adata[idx].X.mean(axis=0)})
-            return pd.concat([pd.concat([A] * len(B)).reset_index(drop=True),
-                              B.reset_index(drop=True)], axis=1)
+                C = pd.DataFrame([dict(zip(by, key))])
+            return pd.concat([pd.concat([C] * len(G)).reset_index(drop=True),
+                              G.reset_index(drop=True)], axis=1)
         
         grp = adata.obs.reset_index().groupby(by=by, observed=True)
         return pd.concat(
@@ -137,6 +142,32 @@ class TestEvaluation:
         )
 
     @staticmethod
+    def compute_correlation(
+        df: pd.DataFrame,
+        by: str|list = ['cell_type', 'condition'],
+        sum_method: str = 'median',
+    ) -> pd.DataFrame:
+        def create_one_df(key, idx):
+            if isinstance(by, str):
+                A = pd.DataFrame([{by: key}])
+            elif isinstance(by, list) and len(by) == 1:
+                A = pd.DataFrame([{by[0]: key}])
+            else:
+                A = pd.DataFrame([dict(zip(by, key))])
+            sub = df.iloc[idx].reset_index(drop=True)
+            expr_corr = sub['pert'+suffix].corr(sub['pred'+suffix])
+            logFC_corr = sub['pert_logFC'].corr(sub['pred_logFC'])
+            B = pd.DataFrame([{'expr_corr': expr_corr, 'logFC_corr': logFC_corr}])
+            return pd.concat([A, B], axis=1)
+
+        suffix = '_' + sum_method
+        grp = df.groupby(by=by, observed=True)
+        return pd.concat(
+            [create_one_df(key, idx) for key, idx in grp.groups.items()],
+            ignore_index=True
+        )
+
+    @staticmethod
     def pred_vs_actual_plot(
         data: pd.DataFrame,
         actual: str,
@@ -165,13 +196,17 @@ class TestEvaluation:
     def merge_data(self) -> pd.DataFrame:
         gene_col = self.gene_colname
         cond_col = self.cond_colname
+        suffix = '_' + self.sum_method
         self.sample_data(self.by, self.sample_n)
-        mean_ctrl = self.summary_expr_values(self.ctrl, self.by, 'ctrl_mean', gene_col)
-        mean_pert = self.summary_expr_values(self.pert_sample, self.by, 'pert_mean', gene_col)
-        mean_pred = self.summary_expr_values(self.pred_sample, self.by, 'pred_mean', gene_col)
-        return mean_ctrl[['cell_type', gene_col, 'ctrl_mean']
-            ].merge(mean_pert, on = ['cell_type', gene_col]
-            ).merge(mean_pred, on = ['cell_type', cond_col, gene_col]
+        summary_ctrl = self.summary_expr_values(
+            self.ctrl, self.by, 'ctrl'+suffix, gene_col, self.sum_method)
+        summary_pert = self.summary_expr_values(
+            self.pert_sample, self.by, 'pert'+suffix, gene_col, self.sum_method)
+        summary_pred = self.summary_expr_values(
+            self.pred_sample, self.by, 'pred'+suffix, gene_col, self.sum_method)
+        return summary_ctrl[['cell_type', gene_col, 'ctrl'+suffix]
+            ].merge(summary_pert, on = ['cell_type', gene_col]
+            ).merge(summary_pred, on = ['cell_type', cond_col, gene_col]
             ).sort_values(self.by
             ).reset_index(drop=True)
 
@@ -196,13 +231,22 @@ class TestEvaluation:
         )
         return self.data.merge(ctrl_pert).merge(ctrl_pred)
     
+    def modify_corr_for_plot(self) -> None:
+        self.corr['expr_corr_label'] = self.corr['expr_corr'].apply(
+            lambda x: 'R = {:.4f}'.format(x))
+        self.corr['logFC_corr_label'] = self.corr['logFC_corr'].apply(
+            lambda x: 'R = {:.4f}'.format(x))
+        
     def plot(self) -> None:
         facets = 'sm_name' if self.mode == 'drug' else 'condition'
+        suffix = '_' + self.sum_method
         (
             self.pred_vs_actual_plot(
-                self.data, "pert_mean", "pred_mean", facets=facets,
-                title='Mean Expression Values of Each Gene',
+                self.data, "pert"+suffix, "pred"+suffix, facets=facets,
+                title='{} Expression Values of Each Gene'.format(
+                    self.sum_method.title()),
                 )
+            + pn.geom_text(pn.aes(label="expr_corr_label"), data=self.corr, x=3, y=6)
             + pn.theme_bw(base_size=25)
         ).save(
             self.save / 'expr_values.png', width=25, height=25
@@ -212,6 +256,8 @@ class TestEvaluation:
                 self.data, "pert_logFC", "pred_logFC", facets=facets,
                 title='Log2 of Fold Changes of Each Gene',
                 )
+            + pn.geom_text(pn.aes(label="logFC_corr_label"), data=self.corr, x=0, y=4)
+            + pn.lims(x=(-5, 5), y=(-5, 5))
             + pn.theme_bw(base_size=25)
         ).save(
             self.save / 'logFC.png', width=25, height=25
@@ -222,8 +268,14 @@ class TestEvaluation:
         self.sample_data(by=self.by, n=200, seed=42)
         self.data = self.merge_data()
         self.data = self.add_logFC_to_data()
+        self.corr = self.compute_correlation(self.data, self.by, self.sum_method)
         if self.mode in ('drug',):
-            self.data = self.create_name_cond_map(self.pert).merge(self.data)
-        self.plot()
+            name_cond = self.create_name_cond_map(self.pert
+                ).sort_values(by='sm_name')
+            self.data = name_cond.merge(self.data)
+            self.corr = name_cond.merge(self.corr)
         self.data.to_csv(self.save / "ctrl_pert_pred.csv", index=False)
+        self.corr.to_csv(self.save / "corr.csv", index=False)
+        self.modify_corr_for_plot()
+        self.plot()
 
